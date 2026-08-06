@@ -444,18 +444,9 @@ async function connect(authState) {
     // changes), so the only way to automate this is by polling
     // groupRequestParticipantsList on an interval — not instant, but
     // it's the only mechanism the library actually exposes.
-    //
-    // groupFetchAllParticipating() is a heavy call (full metadata for
-    // every group the account is in), so this deliberately runs
-    // infrequently and backs off further on failure — polling it
-    // every 60s was tripping WhatsApp's own rate limiting
-    // ("rate-overlimit") on accounts in a lot of groups.
-    const JOIN_REQUEST_POLL_MS = 5 * 60 * 1000; // 5 minutes
-    const JOIN_REQUEST_MAX_BACKOFF_MS = 30 * 60 * 1000; // cap at 30 minutes
+    const JOIN_REQUEST_POLL_MS = 60 * 1000;
 
-    let joinRequestBackoffMs = 0;
-
-    async function pollJoinRequests() {
+    setInterval(async () => {
 
         try {
 
@@ -493,33 +484,18 @@ async function connect(authState) {
 
             }
 
-            joinRequestBackoffMs = 0;
-
         } catch (error) {
-
-            joinRequestBackoffMs = joinRequestBackoffMs
-                ? Math.min(joinRequestBackoffMs * 2, JOIN_REQUEST_MAX_BACKOFF_MS)
-                : JOIN_REQUEST_POLL_MS;
 
             console.log(
                 chalk.red(
-                    `❌ Join-request polling failed (backing off ${Math.round(
-                        joinRequestBackoffMs / 1000
-                    )}s):`,
+                    "❌ Join-request polling failed:",
                     error.message
                 )
             );
 
         }
 
-        setTimeout(
-            pollJoinRequests,
-            JOIN_REQUEST_POLL_MS + joinRequestBackoffMs
-        );
-
-    }
-
-    setTimeout(pollJoinRequests, JOIN_REQUEST_POLL_MS);
+    }, JOIN_REQUEST_POLL_MS);
 
     sock.ev.on(
         "creds.update",
@@ -678,33 +654,19 @@ if (heartbeat) {
 
             const jid = msg.key.remoteJid;
 
-            let sender =
+            const sender =
                 msg.key.participant || msg.key.remoteJid;
 
             // Baileys 7.x LID migration: the same person can show up as
             // either their phone-number JID (@s.whatsapp.net) or their
             // LID (@lid) depending on how WhatsApp routed this specific
             // message. `participantAlt`/`remoteJidAlt` gives the OTHER
-            // form of the same identity when WhatsApp knows it.
-            let senderAlt =
+            // form of the same identity when WhatsApp knows it, so we
+            // track both to avoid treating one person as two people.
+            const senderAlt =
                 msg.key.participantAlt ||
                 msg.key.remoteJidAlt ||
                 null;
-
-            // Prefer the phone-number JID as the canonical `sender`
-            // whenever we know it — almost every permission check
-            // (OWNER_NUMBER, botIds) compares against a phone number,
-            // and @lid is an opaque WhatsApp-internal id with no
-            // relation to the actual number, so it can't be "converted"
-            // — only swapped in when WhatsApp happens to supply the
-            // pairing. Keep the @lid form as senderAlt either way, as
-            // a fallback for the (rarer) case where only @lid is known.
-            if (
-                sender.endsWith("@lid") &&
-                senderAlt?.endsWith("@s.whatsapp.net")
-            ) {
-                [sender, senderAlt] = [senderAlt, sender];
-            }
 
             const senderIdentities = [sender, senderAlt].filter(Boolean);
 
@@ -1596,89 +1558,6 @@ else if (response.action === "take_sticker") {
 
 }
 
-else if (response.action === "send_media_batch") {
-
-    try {
-
-        const items = response.items || [];
-
-        if (!items.length) {
-
-            await sock.sendMessage(jid, {
-                text: "❌ No media found to send."
-            });
-
-            return;
-
-        }
-
-        for (let i = 0; i < items.length; i++) {
-
-            const item = items[i];
-            const isLast = i === items.length - 1;
-
-            try {
-
-                if (item.type === "video") {
-
-                    await sock.sendMessage(jid, {
-                        video: { url: item.url },
-                        caption: isLast ? response.caption : undefined
-                    });
-
-                } else {
-
-                    await sock.sendMessage(jid, {
-                        image: { url: item.url },
-                        caption: isLast ? response.caption : undefined
-                    });
-
-                }
-
-            } catch (itemError) {
-
-                console.log(
-                    chalk.red(
-                        `❌ Failed to send media batch item ${i + 1}:`,
-                        itemError.message
-                    )
-                );
-
-            }
-
-        }
-
-        if (response.reactEmoji) {
-
-            try {
-
-                await sock.sendMessage(jid, {
-                    react: {
-                        text: response.reactEmoji,
-                        key: msg.key
-                    }
-                });
-
-            } catch {}
-
-        }
-
-    } catch (error) {
-
-        console.log(
-            chalk.red("❌ Media batch send failed:", error.message)
-        );
-
-        await sock.sendMessage(jid, {
-            text: "❌ Failed to send that media."
-        });
-
-    }
-
-    return;
-
-}
-
 else if (response.action === "set_group_photo") {
 
     try {
@@ -2098,6 +1977,134 @@ else if (response.action === "update_prefix") {
         );
 
     }
+
+}
+
+                else if (response.action === "post_group_status") {
+
+    try {
+
+        const quotedContent =
+            msg.message
+                ?.extendedTextMessage
+                ?.contextInfo
+                ?.quotedMessage;
+
+        const participants =
+            (groupMetadata?.participants || []).map(p => p.id);
+
+        const caption = response.caption || "";
+
+        let media = null;
+
+        if (quotedContent) {
+            media = await downloadMessageMedia(quotedContent);
+        }
+
+        const statusOptions = {
+            backgroundColor: "#000000",
+            statusJidList: participants
+        };
+
+        if (quotedContent && !media) {
+
+            await sock.sendMessage(jid, {
+                text: "❌ Couldn't read that reply — only images, videos, and audio are supported for status posts."
+            });
+
+            return;
+
+        }
+
+        if (!media) {
+
+            await sock.sendMessage("status@broadcast", {
+                text: caption,
+                contextInfo: {
+                    mentionedJid: participants,
+                    isGroupStatus: true
+                }
+            }, statusOptions);
+
+            await sock.sendMessage(jid, {
+                text: "✅ Text successfully uploaded to group status"
+            });
+
+        }
+
+        else if (media.type === "image") {
+
+            await sock.sendMessage("status@broadcast", {
+                image: media.buffer,
+                caption,
+                contextInfo: {
+                    mentionedJid: participants,
+                    isGroupStatus: true
+                }
+            }, statusOptions);
+
+            await sock.sendMessage(jid, {
+                text: "✅ Image successfully uploaded to group status"
+            });
+
+        }
+
+        else if (media.type === "video" || media.type === "gif") {
+
+            await sock.sendMessage("status@broadcast", {
+                video: media.buffer,
+                caption,
+                contextInfo: {
+                    mentionedJid: participants,
+                    isGroupStatus: true
+                }
+            }, statusOptions);
+
+            await sock.sendMessage(jid, {
+                text: "✅ Video successfully uploaded to group status"
+            });
+
+        }
+
+        else if (media.type === "audio" || media.type === "ptt") {
+
+            await sock.sendMessage("status@broadcast", {
+                audio: media.buffer,
+                mimetype: "audio/mp4",
+                ptt: false,
+                contextInfo: {
+                    mentionedJid: participants,
+                    isGroupStatus: true
+                }
+            }, statusOptions);
+
+            await sock.sendMessage(jid, {
+                text: "✅ Audio successfully uploaded to group status"
+            });
+
+        }
+
+        else {
+
+            await sock.sendMessage(jid, {
+                text: "❌ That media type isn't supported for status posts — use an image, video, or audio."
+            });
+
+        }
+
+    } catch (error) {
+
+        console.log(
+            chalk.red("❌ Group status post failed:", error.message)
+        );
+
+        await sock.sendMessage(jid, {
+            text: "❌ Failed to post to group status. If this keeps happening, WhatsApp may be restricting this number from posting statuses (common on newly-linked or secondary numbers)."
+        });
+
+    }
+
+    return;
 
 }
 
