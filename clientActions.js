@@ -1,131 +1,128 @@
 import chalk from "chalk";
 import fs from "fs";
 import path from "path";
-import { downloadQuotedMedia, downloadMessageMedia } from "./baileys.js";
+import os from "os";
+import axios from "axios";
+import { spawn, spawnSync } from "child_process";
 
-// ==========================
-// Nano / Nanopro helpers
-// ==========================
+const UPDATE_REPO = process.env.UPDATE_REPO || "lawrencenjeri4-lgtm/Kenya-Ultra";
+const UPDATE_BRANCH = process.env.UPDATE_BRANCH || "main";
 
-// Per-sender in-progress .nanopro image collections. Lives in memory
-// on the gateway process — same pattern as the reference bot's
-// bananaSession — since this process holds the live socket anyway
-// and isn't restarted per-message.
-const nanoProSessions = new Map();
+// Never overwrite/delete these when copying the fresh code over
+const UPDATE_EXCLUDE = new Set([
+    "node_modules",
+    ".git",
+    ".env",
+    "auth_info"
+]);
 
-async function uploadToCdn(buffer, filename = "image.jpg") {
+function copyRecursive(src, dest) {
 
-    try {
+    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
 
-        const form = new FormData();
-        form.append("file", new Blob([buffer]), filename);
-        form.append("type", "permanent");
+        if (UPDATE_EXCLUDE.has(entry.name)) continue;
 
-        const res = await fetch("https://tmp.malvryx.dev/upload", {
-            method: "POST",
-            body: form
-        });
+        const srcPath = path.join(src, entry.name);
+        const destPath = path.join(dest, entry.name);
 
-        const data = await res.json();
+        if (entry.isDirectory()) {
 
-        return data?.cdnUrl || data?.directUrl || null;
+            fs.mkdirSync(destPath, { recursive: true });
+            copyRecursive(srcPath, destPath);
 
-    } catch {
+        } else {
 
-        return null;
+            fs.copyFileSync(srcPath, destPath);
+
+        }
 
     }
 
 }
 
-async function pollNanoResult(taskId, maxAttempts = 25, delayMs = 5000) {
+/**
+ * Downloads the latest code from GitHub, copies it over the current
+ * working directory (preserving node_modules/.git/.env/auth_info),
+ * runs npm install, then respawns the process and exits — restarting
+ * this bot instance only. Uses the `tar` binary (present by default
+ * on Alpine/most Linux base images) instead of an npm dependency.
+ */
+export async function selfUpdateAndRestart({ onProgress } = {}) {
 
-    for (let i = 0; i < maxAttempts; i++) {
+    const tarballUrl = `https://github.com/${UPDATE_REPO}/archive/refs/heads/${UPDATE_BRANCH}.tar.gz`;
 
-        await new Promise(resolve => setTimeout(resolve, delayMs));
+    onProgress?.("📥 Downloading latest code...");
 
-        const res = await fetch(
-            `https://omegatech-api.dixonomega.tech/api/ai/nano-banana2-result?task_id=${taskId}`
-        );
+    const { data } = await axios.get(tarballUrl, {
+        responseType: "arraybuffer"
+    });
 
-        const data = await res.json();
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "ku-update-"));
+    const tarPath = path.join(tmpDir, "update.tar.gz");
 
-        if (data.status === "completed" && data.image_url) {
-            return data.image_url;
-        }
+    fs.writeFileSync(tarPath, data);
 
-        if (data.status === "failed") {
-            throw new Error("Generation failed.");
-        }
+    onProgress?.("📦 Extracting update...");
 
+    const extract = spawnSync("tar", ["-xzf", tarPath, "-C", tmpDir]);
+
+    if (extract.status !== 0) {
+        throw new Error("Failed to extract update archive (is `tar` available?).");
     }
 
-    throw new Error("Timed out.");
+    // GitHub tarballs extract into a single "<repo>-<branch>" folder
+    const extractedFolder = fs
+        .readdirSync(tmpDir, { withFileTypes: true })
+        .find((e) => e.isDirectory());
+
+    if (!extractedFolder) {
+        throw new Error("Could not find extracted update folder.");
+    }
+
+    const extractedPath = path.join(tmpDir, extractedFolder.name);
+
+    onProgress?.("🛠️ Applying update...");
+
+    copyRecursive(extractedPath, process.cwd());
+
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+
+    onProgress?.("📦 Installing dependencies...");
+
+    const install = spawnSync("npm", ["install", "--omit=dev"], {
+        cwd: process.cwd(),
+        stdio: "inherit",
+        shell: true
+    });
+
+    if (install.status !== 0) {
+        throw new Error("npm install failed after update.");
+    }
+
+    onProgress?.("♻️ Restarting...");
+
+    // Respawn this process — works the same on Docker/Railway/Render/
+    // Pterodactyl, since it doesn't depend on the host's crash-restart policy
+    const child = spawn(process.argv[0], process.argv.slice(1), {
+        cwd: process.cwd(),
+        detached: true,
+        stdio: "inherit"
+    });
+
+    child.unref();
+
+    setTimeout(() => process.exit(0), 500);
 
 }
 
 export async function executeClientAction({
     action,
     reply,
-    deleteTrigger,
-    kickTarget,
     sock,
     jid,
     msg,
-    sender,
-    groupMetadata,
-    message,
-    prompt,
-    input
+    sender
 }) {
-
-    // ==========================
-    // Moderation
-    // ==========================
-
-    if (deleteTrigger) {
-
-        try {
-
-            await sock.sendMessage(jid, {
-                delete: msg.key
-            });
-
-        } catch (error) {
-
-            console.log(
-                chalk.red(
-                    "❌ Failed to delete moderated message:",
-                    error.message
-                )
-            );
-
-        }
-
-    }
-
-    if (kickTarget) {
-
-        try {
-
-            await sock.groupParticipantsUpdate(
-                jid,
-                [kickTarget],
-                "remove"
-            );
-
-        } catch (error) {
-
-            console.log(
-                chalk.red(
-                    "❌ Failed to kick moderated user:",
-                    error.message
-                )
-            );
-
-        }
-
-    }
 
     // ==========================
     // Reply Types
@@ -173,8 +170,6 @@ export async function executeClientAction({
                     mimetype: reply.mimetype,
                     fileName: reply.fileName,
                     caption: reply.caption,
-                    mentions: reply.mentions || [],
-                    gifPlayback: reply.gifPlayback || undefined,
                     contextInfo: reply.contextInfo || undefined
                 });
 
@@ -196,14 +191,7 @@ export async function executeClientAction({
 
                     let image;
 
-                    if (reply.file && reply.file.startsWith("data:")) {
-
-                        const base64 = reply.file.split(",")[1];
-                        image = Buffer.from(base64, "base64");
-
-                    }
-
-                    else if (reply.file) {
+                    if (reply.file) {
 
                         const imagePath = path.join(
                             process.cwd(),
@@ -214,9 +202,7 @@ export async function executeClientAction({
 
                         image = fs.readFileSync(imagePath);
 
-                    }
-
-                    else {
+                    } else {
 
                         image = {
                             url: reply.url
@@ -226,14 +212,12 @@ export async function executeClientAction({
 
                     await sock.sendMessage(jid, {
                         image,
-                        caption: reply.caption || "",
-                        mentions: reply.mentions || []
+                        caption: reply.caption || ""
                     });
 
                     if (reply.contact) {
 
-                        const phone =
-                            reply.contact.phone.replace(/\+/g, "");
+                        const phone = reply.contact.phone.replace(/\+/g, "");
 
                         const vcard =
 `BEGIN:VCARD
@@ -244,8 +228,7 @@ END:VCARD`;
 
                         await sock.sendMessage(jid, {
                             contacts: {
-                                displayName:
-                                    reply.contact.displayName,
+                                displayName: reply.contact.displayName,
                                 contacts: [{
                                     vcard
                                 }]
@@ -259,10 +242,7 @@ END:VCARD`;
                 } catch (err) {
 
                     console.log(
-                        chalk.red(
-                            "IMAGE ERROR:",
-                            err.message
-                        )
+                        chalk.red("IMAGE ERROR:", err.message)
                     );
 
                     return false;
@@ -270,7 +250,8 @@ END:VCARD`;
                 }
 
             }
-                            case "group_icon": {
+
+            case "group_icon": {
 
                 try {
 
@@ -278,13 +259,9 @@ END:VCARD`;
 
                     try {
 
-                        iconUrl =
-                            await sock.profilePictureUrl(
-                                jid,
-                                "image"
-                            );
+                        iconUrl = await sock.profilePictureUrl(jid, "image");
 
-                    } catch {
+                    } catch (err) {
 
                         iconUrl = null;
 
@@ -300,6 +277,7 @@ END:VCARD`;
 
                     } else {
 
+                        // Group has no icon set — fall back to plain text
                         await sock.sendMessage(jid, {
                             text: reply.caption || "",
                             mentions: reply.mentions || []
@@ -312,10 +290,7 @@ END:VCARD`;
                 } catch (err) {
 
                     console.log(
-                        chalk.red(
-                            "GROUP ICON ERROR:",
-                            err.message
-                        )
+                        chalk.red("GROUP ICON ERROR:", err.message)
                     );
 
                     return false;
@@ -328,15 +303,12 @@ END:VCARD`;
 
                 try {
 
-                    const isAudio =
-                        reply.mediaType === "audio";
+                    const isAudio = reply.mediaType === "audio";
 
                     const caption =
 `${isAudio ? "🎵" : "🎬"} *${reply.title || "Download"}*
 
-📡 ${reply.source || "Unknown"}
-⏱ ${reply.duration || "Unknown"}
-💾 ${reply.size || "Unknown"}
+📡 ${reply.source || "Unknown source"} | ⏱ ${reply.duration || "Unknown"} | 💾 ${reply.size || "Unknown"}
 
 ━━━━━━━━━━━━━━
 
@@ -344,38 +316,24 @@ END:VCARD`;
 
 🐺 Powered by Kenya-Ultra 👑`;
 
-                    const contextInfo =
-                        reply.thumbnail
-                            ? {
-                                externalAdReply: {
-                                    title:
-                                        reply.title ||
-                                        "Kenya-Ultra",
-                                    body:
-                                        `${reply.source || "Kenya-Ultra"} • ${reply.duration || ""}`,
-                                    thumbnailUrl:
-                                        reply.thumbnail,
-                                    sourceUrl:
-                                        reply.url,
-                                    mediaType: 1,
-                                    renderLargerThumbnail: true,
-                                    showAdAttribution: false
-                                }
-                            }
-                            : undefined;
+                    const contextInfo = reply.thumbnail ? {
+                        externalAdReply: {
+                            title: reply.title || "Kenya-Ultra",
+                            body: `${reply.source || "Kenya-Ultra"} • ${reply.duration || ""}`,
+                            thumbnailUrl: reply.thumbnail,
+                            sourceUrl: reply.url,
+                            mediaType: 1,
+                            renderLargerThumbnail: true,
+                            showAdAttribution: false
+                        }
+                    } : undefined;
 
                     if (isAudio) {
 
                         await sock.sendMessage(jid, {
-                            audio: {
-                                url: reply.url
-                            },
-                            mimetype:
-                                reply.mimetype ||
-                                "audio/mpeg",
-                            fileName:
-                                reply.fileName ||
-                                "audio.mp3",
+                            audio: { url: reply.url },
+                            mimetype: reply.mimetype || "audio/mpeg",
+                            fileName: reply.fileName || "audio.mp3",
                             caption,
                             contextInfo
                         });
@@ -383,15 +341,9 @@ END:VCARD`;
                     } else {
 
                         await sock.sendMessage(jid, {
-                            video: {
-                                url: reply.url
-                            },
-                            mimetype:
-                                reply.mimetype ||
-                                "video/mp4",
-                            fileName:
-                                reply.fileName ||
-                                "video.mp4",
+                            video: { url: reply.url },
+                            mimetype: reply.mimetype || "video/mp4",
+                            fileName: reply.fileName || "video.mp4",
                             caption,
                             contextInfo
                         });
@@ -403,10 +355,7 @@ END:VCARD`;
                 } catch (err) {
 
                     console.log(
-                        chalk.red(
-                            "DOWNLOAD ERROR:",
-                            err.message
-                        )
+                        chalk.red("DOWNLOAD ERROR:", err.message)
                     );
 
                     return false;
@@ -418,9 +367,7 @@ END:VCARD`;
             case "document":
 
                 await sock.sendMessage(jid, {
-                    document: {
-                        url: reply.url
-                    },
+                    document: { url: reply.url },
                     fileName: reply.fileName,
                     mimetype: reply.mimetype
                 });
@@ -430,9 +377,7 @@ END:VCARD`;
             case "sticker":
 
                 await sock.sendMessage(jid, {
-                    sticker: {
-                        url: reply.url
-                    }
+                    sticker: { url: reply.url }
                 });
 
                 return true;
@@ -440,9 +385,7 @@ END:VCARD`;
             default:
 
                 console.log(
-                    chalk.yellow(
-                        `⚠ Unknown reply type: ${reply.type}`
-                    )
+                    chalk.yellow(`⚠ Unknown reply type: ${reply.type}`)
                 );
 
                 return false;
@@ -452,375 +395,13 @@ END:VCARD`;
     }
 
     // ==========================
-    // Client Actions
+    // Actions already handled in index.js
     // ==========================
 
     switch (action) {
-                    case "group_status": {
 
-    try {
-
-        const participants =
-            groupMetadata?.participants?.map(p => p.id) || [];
-
-        const quoted =
-            message?.extendedTextMessage
-                ?.contextInfo
-                ?.quotedMessage;
-
-        // TEXT STATUS
-
-        if (!quoted) {
-
-            await sock.sendMessage(
-                jid,
-                {
-                    text: reply.text,
-                    contextInfo: {
-                        mentionedJid: participants,
-                        isGroupStatus: true
-                    }
-                },
-                {
-                    statusJidList: participants
-                }
-            );
-
-            await sock.sendMessage(jid, {
-                text: "✅ Group Status uploaded successfully."
-            });
-
-            return true;
-
-        }
-
-        const media =
-            await downloadQuotedMedia(quoted);
-
-        if (!media) {
-
-            await sock.sendMessage(jid, {
-                text: "❌ Unsupported quoted media."
-            });
-
-            return true;
-
-        }
-
-        if (media.type === "image") {
-
-            await sock.sendMessage(
-                jid,
-                {
-                    image: media.buffer,
-                    caption: reply.text,
-                    contextInfo: {
-                        mentionedJid: participants,
-                        isGroupStatus: true
-                    }
-                },
-                {
-                    statusJidList: participants
-                }
-            );
-
-        }
-
-        else if (media.type === "video") {
-
-            await sock.sendMessage(
-                jid,
-                {
-                    video: media.buffer,
-                    caption: reply.text,
-                    contextInfo: {
-                        mentionedJid: participants,
-                        isGroupStatus: true
-                    }
-                },
-                {
-                    statusJidList: participants
-                }
-            );
-
-        }
-
-        await sock.sendMessage(jid, {
-            text: "✅ Group Status uploaded successfully."
-        });
-
-        return true;
-
-    }
-
-    catch (err) {
-
-        console.log(
-            chalk.red(
-                "GROUP STATUS ERROR:",
-                err
-            )
-        );
-
-        await sock.sendMessage(jid, {
-            text: "❌ Failed to upload Group Status."
-        });
-
-        return true;
-
-    }
-
-                    }
-
-                    case "nano_edit": {
-
-    try {
-
-        const quoted =
-            message?.extendedTextMessage
-                ?.contextInfo
-                ?.quotedMessage;
-
-        const media = await downloadQuotedMedia(quoted);
-
-        if (!media || media.type !== "image") {
-
-            await sock.sendMessage(jid, {
-                text: "❌ Could not download that image."
-            });
-
-            return true;
-
-        }
-
-        const imageUrl = await uploadToCdn(media.buffer);
-
-        if (!imageUrl) {
-
-            await sock.sendMessage(jid, {
-                text: "❌ Failed to upload the image for editing."
-            });
-
-            return true;
-
-        }
-
-        await sock.sendMessage(jid, {
-            react: { text: "🎨", key: msg.key }
-        });
-
-        const initRes = await fetch(
-            `https://omegatech-api.dixonomega.tech/api/ai/nano-banana2?prompt=${encodeURIComponent(prompt)}&image=${encodeURIComponent(imageUrl)}`
-        );
-
-        const initData = await initRes.json();
-
-        if (!initData?.task_id) {
-            throw new Error("No task ID received.");
-        }
-
-        await sock.sendMessage(jid, {
-            text: "🎨 *Editing image...*\n⏳ Please wait 25-30 seconds"
-        });
-
-        const resultUrl = await pollNanoResult(initData.task_id, 20);
-
-        await sock.sendMessage(
-            jid,
-            {
-                image: { url: resultUrl },
-                caption: reply.text
-            },
-            { quoted: msg }
-        );
-
-        await sock.sendMessage(jid, {
-            react: { text: "✅", key: msg.key }
-        });
-
-        return true;
-
-    } catch (err) {
-
-        console.log(
-            chalk.red("NANO EDIT ERROR:", err.message)
-        );
-
-        await sock.sendMessage(jid, {
-            text: `❌ Edit failed: ${err.message}`
-        });
-
-        return true;
-
-    }
-
-                    }
-
-                    case "nanopro": {
-
-    try {
-
-        const key = sender;
-
-        if (!nanoProSessions.has(key)) {
-            nanoProSessions.set(key, []);
-        }
-
-        const images = nanoProSessions.get(key);
-
-        const trimmedInput = (input || "").trim();
-
-        // ── DONE & BLEND ──
-        if (/^done/i.test(trimmedInput)) {
-
-            const finalPrompt =
-                trimmedInput.replace(/^done/i, "").trim();
-
-            if (images.length < 2) {
-
-                await sock.sendMessage(jid, {
-                    text: `⚠️ *Need at least 2 images*\nCurrently: ${images.length}/4`
-                });
-
-                return true;
-
-            }
-
-            if (!finalPrompt) {
-
-                await sock.sendMessage(jid, {
-                    text: "⚠️ *Use:* .nanopro done <prompt>\nExample: .nanopro done blend them together"
-                });
-
-                return true;
-
-            }
-
-            await sock.sendMessage(jid, {
-                react: { text: "🕒", key: msg.key }
-            });
-
-            let url =
-                `https://omegatech-api.dixonomega.tech/api/ai/nanobana-pro-v3?prompt=${encodeURIComponent(finalPrompt)}`;
-
-            images.forEach((img, i) => {
-                url += `&image${i + 1}=${encodeURIComponent(img)}`;
-            });
-
-            const initRes = await fetch(url);
-            const initData = await initRes.json();
-
-            if (!initData?.task_id) {
-                throw new Error("No task ID.");
-            }
-
-            await sock.sendMessage(jid, {
-                text: `🎨 *Blending ${images.length} images...*\n⏳ Please wait`
-            });
-
-            const resultUrl = await pollNanoResult(initData.task_id);
-
-            await sock.sendMessage(
-                jid,
-                {
-                    image: { url: resultUrl },
-                    caption:
-`╭━━━〔 🍌 *NANO PRO BLEND* 〕━━━⬣
-┃ 🖼️ *Images:* ${images.length}
-┃ 📝 *Prompt:* ${finalPrompt}
-┃ 🐺 *Bot:* Kenya-Ultra
-╰━━━━━━━━━━━━━━⬣`
-                },
-                { quoted: msg }
-            );
-
-            await sock.sendMessage(jid, {
-                react: { text: "✅", key: msg.key }
-            });
-
-            nanoProSessions.delete(key);
-
-            return true;
-
-        }
-
-        // ── COLLECT IMAGES ──
-        const quoted =
-            message?.extendedTextMessage
-                ?.contextInfo
-                ?.quotedMessage;
-
-        let media = null;
-
-        if (quoted?.imageMessage) {
-            media = await downloadQuotedMedia(quoted);
-        } else if (message?.imageMessage) {
-            media = await downloadMessageMedia(msg);
-        }
-
-        if (!media || media.type !== "image") {
-
-            await sock.sendMessage(jid, {
-                text: `📸 *Send image with .nanopro*\n\nCurrent: ${images.length}/4\n\nWhen done: .nanopro done <prompt>`
-            });
-
-            return true;
-
-        }
-
-        if (images.length >= 4) {
-
-            await sock.sendMessage(jid, {
-                text: "❌ *Max 4 images reached*\nUse: .nanopro done <prompt>"
-            });
-
-            return true;
-
-        }
-
-        const link = await uploadToCdn(media.buffer);
-
-        if (!link) {
-
-            await sock.sendMessage(jid, {
-                text: "❌ Failed to upload that image, try again."
-            });
-
-            return true;
-
-        }
-
-        images.push(link);
-
-        await sock.sendMessage(jid, {
-            react: { text: "📥", key: msg.key }
-        });
-
-        await sock.sendMessage(jid, {
-            text: `✅ *Image added!* (${images.length}/4)\n\n${images.length === 1 ? "📸 Send another image" : images.length < 4 ? `📸 ${4 - images.length} more needed` : "🎨 Ready! Use: *.nanopro done <prompt>*"}`
-        });
-
-        return true;
-
-    } catch (err) {
-
-        console.log(
-            chalk.red("NANOPRO ERROR:", err.message)
-        );
-
-        await sock.sendMessage(jid, {
-            text: `❌ Nanopro failed: ${err.message}`
-        });
-
-        return true;
-
-    }
-
-                    }
-
-                    case "recover_view_once":
+        case "recover_view_once":
         case "delete_message":
-        case "moderate":
             return true;
 
         default:
@@ -829,4 +410,4 @@ END:VCARD`;
     }
 
 }
-            
+
