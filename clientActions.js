@@ -10,13 +10,13 @@ export async function executeClientAction({
     sock,
     jid,
     msg,
-    sender
+    sender,
+    groupMetadata,
+    message
 }) {
 
     // ==========================
-    // Moderation side effects (delete/kick) — always run
-    // first, independent of whether a reply is also sent,
-    // so a warning text doesn't swallow the actual action.
+    // Moderation
     // ==========================
 
     if (deleteTrigger) {
@@ -137,7 +137,9 @@ export async function executeClientAction({
                         const base64 = reply.file.split(",")[1];
                         image = Buffer.from(base64, "base64");
 
-                    } else if (reply.file) {
+                    }
+
+                    else if (reply.file) {
 
                         const imagePath = path.join(
                             process.cwd(),
@@ -148,7 +150,9 @@ export async function executeClientAction({
 
                         image = fs.readFileSync(imagePath);
 
-                    } else {
+                    }
+
+                    else {
 
                         image = {
                             url: reply.url
@@ -164,7 +168,8 @@ export async function executeClientAction({
 
                     if (reply.contact) {
 
-                        const phone = reply.contact.phone.replace(/\+/g, "");
+                        const phone =
+                            reply.contact.phone.replace(/\+/g, "");
 
                         const vcard =
 `BEGIN:VCARD
@@ -175,7 +180,8 @@ END:VCARD`;
 
                         await sock.sendMessage(jid, {
                             contacts: {
-                                displayName: reply.contact.displayName,
+                                displayName:
+                                    reply.contact.displayName,
                                 contacts: [{
                                     vcard
                                 }]
@@ -189,7 +195,10 @@ END:VCARD`;
                 } catch (err) {
 
                     console.log(
-                        chalk.red("IMAGE ERROR:", err.message)
+                        chalk.red(
+                            "IMAGE ERROR:",
+                            err.message
+                        )
                     );
 
                     return false;
@@ -197,8 +206,7 @@ END:VCARD`;
                 }
 
             }
-
-            case "group_icon": {
+                            case "group_icon": {
 
                 try {
 
@@ -206,9 +214,13 @@ END:VCARD`;
 
                     try {
 
-                        iconUrl = await sock.profilePictureUrl(jid, "image");
+                        iconUrl =
+                            await sock.profilePictureUrl(
+                                jid,
+                                "image"
+                            );
 
-                    } catch (err) {
+                    } catch {
 
                         iconUrl = null;
 
@@ -236,7 +248,10 @@ END:VCARD`;
                 } catch (err) {
 
                     console.log(
-                        chalk.red("GROUP ICON ERROR:", err.message)
+                        chalk.red(
+                            "GROUP ICON ERROR:",
+                            err.message
+                        )
                     );
 
                     return false;
@@ -249,12 +264,15 @@ END:VCARD`;
 
                 try {
 
-                    const isAudio = reply.mediaType === "audio";
+                    const isAudio =
+                        reply.mediaType === "audio";
 
                     const caption =
 `${isAudio ? "🎵" : "🎬"} *${reply.title || "Download"}*
 
-📡 ${reply.source || "Unknown source"} | ⏱ ${reply.duration || "Unknown"} | 💾 ${reply.size || "Unknown"}
+📡 ${reply.source || "Unknown"}
+⏱ ${reply.duration || "Unknown"}
+💾 ${reply.size || "Unknown"}
 
 ━━━━━━━━━━━━━━
 
@@ -262,24 +280,38 @@ END:VCARD`;
 
 🐺 Powered by Kenya-Ultra 👑`;
 
-                    const contextInfo = reply.thumbnail ? {
-                        externalAdReply: {
-                            title: reply.title || "Kenya-Ultra",
-                            body: `${reply.source || "Kenya-Ultra"} • ${reply.duration || ""}`,
-                            thumbnailUrl: reply.thumbnail,
-                            sourceUrl: reply.url,
-                            mediaType: 1,
-                            renderLargerThumbnail: true,
-                            showAdAttribution: false
-                        }
-                    } : undefined;
+                    const contextInfo =
+                        reply.thumbnail
+                            ? {
+                                externalAdReply: {
+                                    title:
+                                        reply.title ||
+                                        "Kenya-Ultra",
+                                    body:
+                                        `${reply.source || "Kenya-Ultra"} • ${reply.duration || ""}`,
+                                    thumbnailUrl:
+                                        reply.thumbnail,
+                                    sourceUrl:
+                                        reply.url,
+                                    mediaType: 1,
+                                    renderLargerThumbnail: true,
+                                    showAdAttribution: false
+                                }
+                            }
+                            : undefined;
 
                     if (isAudio) {
 
                         await sock.sendMessage(jid, {
-                            audio: { url: reply.url },
-                            mimetype: reply.mimetype || "audio/mpeg",
-                            fileName: reply.fileName || "audio.mp3",
+                            audio: {
+                                url: reply.url
+                            },
+                            mimetype:
+                                reply.mimetype ||
+                                "audio/mpeg",
+                            fileName:
+                                reply.fileName ||
+                                "audio.mp3",
                             caption,
                             contextInfo
                         });
@@ -287,9 +319,15 @@ END:VCARD`;
                     } else {
 
                         await sock.sendMessage(jid, {
-                            video: { url: reply.url },
-                            mimetype: reply.mimetype || "video/mp4",
-                            fileName: reply.fileName || "video.mp4",
+                            video: {
+                                url: reply.url
+                            },
+                            mimetype:
+                                reply.mimetype ||
+                                "video/mp4",
+                            fileName:
+                                reply.fileName ||
+                                "video.mp4",
                             caption,
                             contextInfo
                         });
@@ -301,7 +339,10 @@ END:VCARD`;
                 } catch (err) {
 
                     console.log(
-                        chalk.red("DOWNLOAD ERROR:", err.message)
+                        chalk.red(
+                            "DOWNLOAD ERROR:",
+                            err.message
+                        )
                     );
 
                     return false;
@@ -313,7 +354,9 @@ END:VCARD`;
             case "document":
 
                 await sock.sendMessage(jid, {
-                    document: { url: reply.url },
+                    document: {
+                        url: reply.url
+                    },
                     fileName: reply.fileName,
                     mimetype: reply.mimetype
                 });
@@ -323,7 +366,9 @@ END:VCARD`;
             case "sticker":
 
                 await sock.sendMessage(jid, {
-                    sticker: { url: reply.url }
+                    sticker: {
+                        url: reply.url
+                    }
                 });
 
                 return true;
@@ -331,7 +376,9 @@ END:VCARD`;
             default:
 
                 console.log(
-                    chalk.yellow(`⚠ Unknown reply type: ${reply.type}`)
+                    chalk.yellow(
+                        `⚠ Unknown reply type: ${reply.type}`
+                    )
                 );
 
                 return false;
@@ -341,12 +388,161 @@ END:VCARD`;
     }
 
     // ==========================
-    // Actions already handled in index.js
+    // Client Actions
     // ==========================
 
     switch (action) {
+                    case "group_status": {
 
-        case "recover_view_once":
+            try {
+
+                const participants =
+                    groupMetadata?.participants?.map(p => p.id) || [];
+
+                const quoted =
+                    message?.extendedTextMessage?.contextInfo?.quotedMessage;
+
+                // ==========================
+                // TEXT STATUS
+                // ==========================
+
+                if (!quoted) {
+
+                    await sock.sendMessage(
+                        jid,
+                        {
+                            text: reply.text || "",
+                            contextInfo: {
+                                mentionedJid: participants,
+                                isGroupStatus: true
+                            }
+                        },
+                        {
+                            statusJidList: participants
+                        }
+                    );
+
+                    await sock.sendMessage(jid, {
+                        text: "✅ Group Status uploaded successfully."
+                    });
+
+                    return true;
+
+                }
+
+                // ==========================
+                // IMAGE STATUS
+                // ==========================
+
+                if (quoted.imageMessage) {
+
+                    const media = await msg.quoted.download();
+
+                    await sock.sendMessage(
+                        jid,
+                        {
+                            image: media,
+                            caption: reply.text || "",
+                            contextInfo: {
+                                mentionedJid: participants,
+                                isGroupStatus: true
+                            }
+                        },
+                        {
+                            statusJidList: participants
+                        }
+                    );
+
+                    await sock.sendMessage(jid, {
+                        text: "✅ Image Group Status uploaded."
+                    });
+
+                    return true;
+
+                }
+
+                // ==========================
+                // VIDEO STATUS
+                // ==========================
+
+                if (quoted.videoMessage) {
+
+                    const media = await msg.quoted.download();
+
+                    await sock.sendMessage(
+                        jid,
+                        {
+                            video: media,
+                            caption: reply.text || "",
+                            contextInfo: {
+                                mentionedJid: participants,
+                                isGroupStatus: true
+                            }
+                        },
+                        {
+                            statusJidList: participants
+                        }
+                    );
+
+                    await sock.sendMessage(jid, {
+                        text: "✅ Video Group Status uploaded."
+                    });
+
+                    return true;
+
+                }
+
+                // ==========================
+                // AUDIO STATUS
+                // ==========================
+
+                if (quoted.audioMessage) {
+
+                    const media = await msg.quoted.download();
+
+                    await sock.sendMessage(
+                        jid,
+                        {
+                            audio: media,
+                            mimetype: "audio/mp4",
+                            ptt: false,
+                            contextInfo: {
+                                mentionedJid: participants,
+                                isGroupStatus: true
+                            }
+                        },
+                        {
+                            statusJidList: participants
+                        }
+                    );
+
+                    await sock.sendMessage(jid, {
+                        text: "✅ Audio Group Status uploaded."
+                    });
+
+                    return true;
+
+                }
+
+            } catch (err) {
+
+                console.log(
+                    chalk.red(
+                        "GROUP STATUS ERROR:",
+                        err.message
+                    )
+                );
+
+                await sock.sendMessage(jid, {
+                    text: "❌ Failed to upload Group Status."
+                });
+
+                return true;
+
+            }
+
+            }
+                    case "recover_view_once":
         case "delete_message":
         case "moderate":
             return true;
@@ -356,4 +552,5 @@ END:VCARD`;
 
     }
 
-                                }
+}
+            
