@@ -115,6 +115,43 @@ export async function selfUpdateAndRestart({ onProgress } = {}) {
 
 }
 
+const EXT_FROM_MIME = {
+    "image/jpeg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/gif": "gif",
+    "video/mp4": "mp4",
+    "video/3gpp": "3gp"
+};
+
+/**
+ * Uploads a buffer to catbox.moe (no signup/API key needed) and
+ * returns a direct, permanent URL to the file. Uses Node's built-in
+ * fetch/FormData/Blob (Node 20+) — no extra dependency required.
+ */
+export async function uploadMediaAndGetUrl(buffer, mimetype) {
+
+    const ext = EXT_FROM_MIME[mimetype] || "bin";
+
+    const form = new FormData();
+    form.append("reqtype", "fileupload");
+    form.append("fileToUpload", new Blob([buffer], { type: mimetype }), `file.${ext}`);
+
+    const res = await fetch("https://catbox.moe/user/api.php", {
+        method: "POST",
+        body: form
+    });
+
+    const text = (await res.text()).trim();
+
+    if (!text.startsWith("http")) {
+        throw new Error(text || "Upload failed.");
+    }
+
+    return text;
+
+}
+
 export async function executeClientAction({
     action,
     reply,

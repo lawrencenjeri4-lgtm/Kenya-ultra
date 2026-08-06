@@ -10,7 +10,7 @@ import {
 } from "./baileys.js";
 import { bootstrapAuthState } from "./sessionBootstrap.js";
 import core from "./core.js";
-import { executeClientAction, selfUpdateAndRestart } from "./clientActions.js";
+import { executeClientAction, selfUpdateAndRestart, uploadMediaAndGetUrl } from "./clientActions.js";
 
 dotenv.config();
 
@@ -1123,6 +1123,80 @@ else if (response.action === "update_prefix") {
 
             text:
                 `❌ Update failed: ${err.message || "Unknown error"}`
+
+        });
+
+    }
+
+                }
+
+                else if (response.action === "get_media_url") {
+
+    try {
+
+        const quoted =
+            msg.message
+                ?.extendedTextMessage
+                ?.contextInfo
+                ?.quotedMessage;
+
+        const mediaMsg =
+            quoted?.imageMessage || quoted?.videoMessage;
+
+        if (!quoted || !mediaMsg) {
+
+            await sock.sendMessage(jid, {
+                text: "❌ No quoted image/video found."
+            });
+
+            return;
+
+        }
+
+        const media =
+            await downloadQuotedMedia(quoted);
+
+        if (!media) {
+
+            await sock.sendMessage(jid, {
+                text: "❌ Failed to download the media."
+            });
+
+            return;
+
+        }
+
+        const link =
+            await uploadMediaAndGetUrl(
+                media.buffer,
+                mediaMsg.mimetype || "application/octet-stream"
+            );
+
+        await sock.sendMessage(jid, {
+
+            text:
+`╭⊷ 🔗 *MEDIA URL*
+
+│
+
+├⊷ ${link}
+
+│
+
+╰⊷ 🐺 *Kenya-Ultra*`
+
+        });
+
+    }
+
+    catch (err) {
+
+        console.log(err);
+
+        await sock.sendMessage(jid, {
+
+            text:
+                "❌ Failed to get a URL for that media."
 
         });
 
