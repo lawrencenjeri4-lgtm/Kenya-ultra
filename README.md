@@ -2,58 +2,75 @@
 
 # 🇰🇪 Kenya-Ultra
 
-### The Next Generation WhatsApp Bot Platform
+### Next-Generation WhatsApp Automation Platform
 
-Fast • Secure • Lightweight
+**Fast • Secure • Lightweight**
 
-> Generate a SESSION_ID, deploy in minutes, and let Kenya-Ultra handle the rest.
+<p>
+  <img src="https://img.shields.io/badge/Version-v1.0.0-blue?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Status-Beta-success?style=for-the-badge">
+  <img src="https://img.shields.io/badge/Platform-Node.js-green?style=for-the-badge">
+</p>
 
----
+**A modern WhatsApp automation platform built by Lucid Dev.**
 
-**Version:** `v1.0.0` • **Status:** `Beta`
+⭐ Star this repository if you like the project.
 
 </div>
 
 ---
 
-## 🚀 Overview
+# 🚀 Overview
 
-Kenya-Ultra is a lightweight WhatsApp client designed to work seamlessly with the Kenya-Ultra platform.
+Kenya-Ultra is a lightweight WhatsApp client designed to work seamlessly with the Kenya-Ultra ecosystem.
 
-Instead of configuring dozens of files, simply:
+Deploy your bot in just a few minutes.
 
 ```text
-1. Generate a SESSION_ID
+Generate SESSION_ID
         ↓
-2. Download Kenya-Ultra
+Download Kenya-Ultra
         ↓
-3. Paste the SESSION_ID into .env
+Paste SESSION_ID into .env
         ↓
-4. Deploy
+Deploy
         ↓
-5. You're Online 🚀
+Enjoy 🚀
 ```
 
 No QR scanning after deployment.
 
-No complicated setup.
+No complicated authentication setup.
 
 ---
 
-## ✨ Features
+# 🌐 Official Pairing Website
 
-- 📱 Pair Code Authentication
-- 🔐 Secure SESSION_ID Login
-- 🚀 Lightweight Client
-- ☁️ Railway Ready
-- ▲ Render Ready
+Generate your **SESSION_ID** instantly from the official Kenya-Ultra Pairing Portal.
+
+### 🔗 Pair Your Bot
+
+**[kenya\-ultra\-web.vercel.app](https://reference-url-citation.invalid/0)**
+
+---
+
+# ✨ Features
+
+- 🔐 Secure SESSION_ID Authentication
+- 📱 Pair Code Login
+- ⚡ Lightning Fast Startup
+- ☁️ Cloud Deployment Ready
 - 🐳 Docker Ready
-- 🔄 Automatic Updates
+- 🚂 Railway Ready
+- ▲ Render Ready
+- 🖥 VPS Compatible
+- 🎮 Pterodactyl Compatible
+- 🔄 Automatic Session Recovery
 - ❤️ Beginner Friendly
 
 ---
 
-## 📦 Installation
+# 📦 Installation
 
 Clone the repository
 
@@ -73,7 +90,7 @@ Install dependencies
 npm install
 ```
 
-Create your `.env`
+Configure your environment
 
 ```env
 SESSION_ID=YOUR_SESSION_ID
@@ -87,15 +104,7 @@ npm start
 
 ---
 
-## 🌐 Get Your SESSION_ID
-
-Generate your SESSION_ID from the official Kenya-Ultra website.
-
-> **Coming Soon**
-
----
-
-## 🚀 Deployment
+# 🚀 Deployment
 
 Kenya-Ultra supports deployment on:
 
@@ -108,28 +117,38 @@ Kenya-Ultra supports deployment on:
 
 ---
 
-## 📖 Documentation
+# 📖 Documentation
 
-Documentation will be available on the official Kenya-Ultra website.
-
-> **Coming Soon**
+Documentation is currently under development and will be available soon.
 
 ---
 
-## 🛣 Roadmap
+# 🗺 Roadmap
 
 - ✅ Public Client
+- ✅ SESSION_ID Authentication
 - 🔄 Kenya-Ultra Core
-- 🔄 Pair Code Authentication
 - 🔄 Official Website
 - 🔄 Dashboard
 - 🔄 Cloud Sync
 - 🔄 Plugin Marketplace
-- 🔄 Premium Features
+- 🔄 AI Features
+- 🔄 Premium Services
 
 ---
 
-## ❤️ Support
+# 🤝 Contributing
+
+Contributions are always welcome.
+
+1. Fork the repository
+2. Create a new branch
+3. Commit your changes
+4. Open a Pull Request
+
+---
+
+# ❤️ Support
 
 If you encounter any issues or have suggestions, please open an issue in this repository.
 
@@ -137,8 +156,12 @@ If you encounter any issues or have suggestions, please open an issue in this re
 
 <div align="center">
 
-### Built with ❤️ in Kenya 🇰🇪
+## 👨‍💻 Developed by Lucid Dev
+
+🇰🇪 Proudly Built in Kenya
 
 **Kenya-Ultra © 2026**
+
+*"Powering the next generation of WhatsApp automation."*
 
 </div>
