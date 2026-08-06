@@ -1,6 +1,7 @@
 import chalk from "chalk";
 import fs from "fs";
 import path from "path";
+import { downloadQuotedMedia } from "./baileys.js";
 
 export async function executeClientAction({
     action,
@@ -394,13 +395,119 @@ END:VCARD`;
     switch (action) {
                     case "group_status": {
 
-            try {
+    try {
 
-                const participants =
-                    groupMetadata?.participants?.map(p => p.id) || [];
+        const participants =
+            groupMetadata?.participants?.map(p => p.id) || [];
 
-                const quoted =
-                    message?.extendedTextMessage?.contextInfo?.quotedMessage;
+        const quoted =
+            message?.extendedTextMessage
+                ?.contextInfo
+                ?.quotedMessage;
+
+        // TEXT STATUS
+
+        if (!quoted) {
+
+            await sock.sendMessage(
+                jid,
+                {
+                    text: reply.text,
+                    contextInfo: {
+                        mentionedJid: participants,
+                        isGroupStatus: true
+                    }
+                },
+                {
+                    statusJidList: participants
+                }
+            );
+
+            await sock.sendMessage(jid, {
+                text: "✅ Group Status uploaded successfully."
+            });
+
+            return true;
+
+        }
+
+        const media =
+            await downloadQuotedMedia(quoted);
+
+        if (!media) {
+
+            await sock.sendMessage(jid, {
+                text: "❌ Unsupported quoted media."
+            });
+
+            return true;
+
+        }
+
+        if (media.type === "image") {
+
+            await sock.sendMessage(
+                jid,
+                {
+                    image: media.buffer,
+                    caption: reply.text,
+                    contextInfo: {
+                        mentionedJid: participants,
+                        isGroupStatus: true
+                    }
+                },
+                {
+                    statusJidList: participants
+                }
+            );
+
+        }
+
+        else if (media.type === "video") {
+
+            await sock.sendMessage(
+                jid,
+                {
+                    video: media.buffer,
+                    caption: reply.text,
+                    contextInfo: {
+                        mentionedJid: participants,
+                        isGroupStatus: true
+                    }
+                },
+                {
+                    statusJidList: participants
+                }
+            );
+
+        }
+
+        await sock.sendMessage(jid, {
+            text: "✅ Group Status uploaded successfully."
+        });
+
+        return true;
+
+    }
+
+    catch (err) {
+
+        console.log(
+            chalk.red(
+                "GROUP STATUS ERROR:",
+                err
+            )
+        );
+
+        await sock.sendMessage(jid, {
+            text: "❌ Failed to upload Group Status."
+        });
+
+        return true;
+
+    }
+
+                    }
 
                 // ==========================
                 // TEXT STATUS
