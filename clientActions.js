@@ -124,14 +124,7 @@ const EXT_FROM_MIME = {
     "video/3gpp": "3gp"
 };
 
-/**
- * Uploads a buffer to catbox.moe (no signup/API key needed) and
- * returns a direct, permanent URL to the file. Uses Node's built-in
- * fetch/FormData/Blob (Node 20+) — no extra dependency required.
- */
-export async function uploadMediaAndGetUrl(buffer, mimetype) {
-
-    const ext = EXT_FROM_MIME[mimetype] || "bin";
+async function uploadToCatbox(buffer, mimetype, ext) {
 
     const form = new FormData();
     form.append("reqtype", "fileupload");
@@ -139,16 +132,108 @@ export async function uploadMediaAndGetUrl(buffer, mimetype) {
 
     const res = await fetch("https://catbox.moe/user/api.php", {
         method: "POST",
+        headers: {
+            // catbox's anti-abuse filter blocks requests that don't
+            // look browser-like — this alone fixes it in many cases
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        },
         body: form
     });
 
     const text = (await res.text()).trim();
 
     if (!text.startsWith("http")) {
-        throw new Error(text || "Upload failed.");
+        throw new Error(text || "catbox upload failed");
     }
 
     return text;
+
+}
+
+async function uploadTo0x0(buffer, mimetype, ext) {
+
+    const form = new FormData();
+    form.append("file", new Blob([buffer], { type: mimetype }), `file.${ext}`);
+
+    const res = await fetch("https://0x0.st", {
+        method: "POST",
+        headers: {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+        },
+        body: form
+    });
+
+    const text = (await res.text()).trim();
+
+    if (!text.startsWith("http")) {
+        throw new Error(text || "0x0.st upload failed");
+    }
+
+    return text;
+
+}
+
+async function uploadToTmpfiles(buffer, mimetype, ext) {
+
+    const form = new FormData();
+    form.append("file", new Blob([buffer], { type: mimetype }), `file.${ext}`);
+
+    const res = await fetch("https://tmpfiles.org/api/v1/upload", {
+        method: "POST",
+        body: form
+    });
+
+    const json = await res.json();
+
+    if (!json?.data?.url) {
+        throw new Error("tmpfiles upload failed");
+    }
+
+    // tmpfiles' page URL needs "/dl/" inserted to become a direct link
+    return json.data.url.replace("tmpfiles.org/", "tmpfiles.org/dl/");
+
+}
+
+/**
+ * Uploads a buffer and returns a direct URL, no signup/API key needed.
+ * Tries hosts in order of how long the link lasts:
+ *   1. catbox.moe   — permanent, but blocks a lot of datacenter/VPS
+ *      IPs (common on hosting panels like Pterodactyl) with a
+ *      generic "Invalid uploader" error.
+ *   2. 0x0.st        — retention scales with file size/popularity
+ *      (minimum ~30 days), rarely blocks server IPs.
+ *   3. tmpfiles.org  — always accepts server uploads, but links
+ *      expire in 1 hour. Last-resort only.
+ */
+export async function uploadMediaAndGetUrl(buffer, mimetype) {
+
+    const ext = EXT_FROM_MIME[mimetype] || "bin";
+
+    try {
+
+        return await uploadToCatbox(buffer, mimetype, ext);
+
+    } catch (err) {
+
+        console.log(
+            chalk.yellow(`Catbox upload failed (${err.message}), trying 0x0.st...`)
+        );
+
+    }
+
+    try {
+
+        return await uploadTo0x0(buffer, mimetype, ext);
+
+    } catch (err) {
+
+        console.log(
+            chalk.yellow(`0x0.st upload failed (${err.message}), falling back to tmpfiles...`)
+        );
+
+        return await uploadToTmpfiles(buffer, mimetype, ext);
+
+    }
 
 }
 
