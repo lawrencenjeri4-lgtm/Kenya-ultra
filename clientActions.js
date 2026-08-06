@@ -1,7 +1,68 @@
 import chalk from "chalk";
 import fs from "fs";
 import path from "path";
-import { downloadQuotedMedia } from "./baileys.js";
+import { downloadQuotedMedia, downloadMessageMedia } from "./baileys.js";
+
+// ==========================
+// Nano / Nanopro helpers
+// ==========================
+
+// Per-sender in-progress .nanopro image collections. Lives in memory
+// on the gateway process — same pattern as the reference bot's
+// bananaSession — since this process holds the live socket anyway
+// and isn't restarted per-message.
+const nanoProSessions = new Map();
+
+async function uploadToCdn(buffer, filename = "image.jpg") {
+
+    try {
+
+        const form = new FormData();
+        form.append("file", new Blob([buffer]), filename);
+        form.append("type", "permanent");
+
+        const res = await fetch("https://tmp.malvryx.dev/upload", {
+            method: "POST",
+            body: form
+        });
+
+        const data = await res.json();
+
+        return data?.cdnUrl || data?.directUrl || null;
+
+    } catch {
+
+        return null;
+
+    }
+
+}
+
+async function pollNanoResult(taskId, maxAttempts = 25, delayMs = 5000) {
+
+    for (let i = 0; i < maxAttempts; i++) {
+
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+
+        const res = await fetch(
+            `https://omegatech-api.dixonomega.tech/api/ai/nano-banana2-result?task_id=${taskId}`
+        );
+
+        const data = await res.json();
+
+        if (data.status === "completed" && data.image_url) {
+            return data.image_url;
+        }
+
+        if (data.status === "failed") {
+            throw new Error("Generation failed.");
+        }
+
+    }
+
+    throw new Error("Timed out.");
+
+}
 
 export async function executeClientAction({
     action,
@@ -13,7 +74,9 @@ export async function executeClientAction({
     msg,
     sender,
     groupMetadata,
-    message
+    message,
+    prompt,
+    input
 }) {
 
     // ==========================
@@ -508,6 +571,253 @@ END:VCARD`;
     }
 
                     }
+
+                    case "nano_edit": {
+
+    try {
+
+        const quoted =
+            message?.extendedTextMessage
+                ?.contextInfo
+                ?.quotedMessage;
+
+        const media = await downloadQuotedMedia(quoted);
+
+        if (!media || media.type !== "image") {
+
+            await sock.sendMessage(jid, {
+                text: "❌ Could not download that image."
+            });
+
+            return true;
+
+        }
+
+        const imageUrl = await uploadToCdn(media.buffer);
+
+        if (!imageUrl) {
+
+            await sock.sendMessage(jid, {
+                text: "❌ Failed to upload the image for editing."
+            });
+
+            return true;
+
+        }
+
+        await sock.sendMessage(jid, {
+            react: { text: "🎨", key: msg.key }
+        });
+
+        const initRes = await fetch(
+            `https://omegatech-api.dixonomega.tech/api/ai/nano-banana2?prompt=${encodeURIComponent(prompt)}&image=${encodeURIComponent(imageUrl)}`
+        );
+
+        const initData = await initRes.json();
+
+        if (!initData?.task_id) {
+            throw new Error("No task ID received.");
+        }
+
+        await sock.sendMessage(jid, {
+            text: "🎨 *Editing image...*\n⏳ Please wait 25-30 seconds"
+        });
+
+        const resultUrl = await pollNanoResult(initData.task_id, 20);
+
+        await sock.sendMessage(
+            jid,
+            {
+                image: { url: resultUrl },
+                caption: reply.text
+            },
+            { quoted: msg }
+        );
+
+        await sock.sendMessage(jid, {
+            react: { text: "✅", key: msg.key }
+        });
+
+        return true;
+
+    } catch (err) {
+
+        console.log(
+            chalk.red("NANO EDIT ERROR:", err.message)
+        );
+
+        await sock.sendMessage(jid, {
+            text: `❌ Edit failed: ${err.message}`
+        });
+
+        return true;
+
+    }
+
+                    }
+
+                    case "nanopro": {
+
+    try {
+
+        const key = sender;
+
+        if (!nanoProSessions.has(key)) {
+            nanoProSessions.set(key, []);
+        }
+
+        const images = nanoProSessions.get(key);
+
+        const trimmedInput = (input || "").trim();
+
+        // ── DONE & BLEND ──
+        if (/^done/i.test(trimmedInput)) {
+
+            const finalPrompt =
+                trimmedInput.replace(/^done/i, "").trim();
+
+            if (images.length < 2) {
+
+                await sock.sendMessage(jid, {
+                    text: `⚠️ *Need at least 2 images*\nCurrently: ${images.length}/4`
+                });
+
+                return true;
+
+            }
+
+            if (!finalPrompt) {
+
+                await sock.sendMessage(jid, {
+                    text: "⚠️ *Use:* .nanopro done <prompt>\nExample: .nanopro done blend them together"
+                });
+
+                return true;
+
+            }
+
+            await sock.sendMessage(jid, {
+                react: { text: "🕒", key: msg.key }
+            });
+
+            let url =
+                `https://omegatech-api.dixonomega.tech/api/ai/nanobana-pro-v3?prompt=${encodeURIComponent(finalPrompt)}`;
+
+            images.forEach((img, i) => {
+                url += `&image${i + 1}=${encodeURIComponent(img)}`;
+            });
+
+            const initRes = await fetch(url);
+            const initData = await initRes.json();
+
+            if (!initData?.task_id) {
+                throw new Error("No task ID.");
+            }
+
+            await sock.sendMessage(jid, {
+                text: `🎨 *Blending ${images.length} images...*\n⏳ Please wait`
+            });
+
+            const resultUrl = await pollNanoResult(initData.task_id);
+
+            await sock.sendMessage(
+                jid,
+                {
+                    image: { url: resultUrl },
+                    caption:
+`╭━━━〔 🍌 *NANO PRO BLEND* 〕━━━⬣
+┃ 🖼️ *Images:* ${images.length}
+┃ 📝 *Prompt:* ${finalPrompt}
+┃ 🐺 *Bot:* Kenya-Ultra
+╰━━━━━━━━━━━━━━⬣`
+                },
+                { quoted: msg }
+            );
+
+            await sock.sendMessage(jid, {
+                react: { text: "✅", key: msg.key }
+            });
+
+            nanoProSessions.delete(key);
+
+            return true;
+
+        }
+
+        // ── COLLECT IMAGES ──
+        const quoted =
+            message?.extendedTextMessage
+                ?.contextInfo
+                ?.quotedMessage;
+
+        let media = null;
+
+        if (quoted?.imageMessage) {
+            media = await downloadQuotedMedia(quoted);
+        } else if (message?.imageMessage) {
+            media = await downloadMessageMedia(msg);
+        }
+
+        if (!media || media.type !== "image") {
+
+            await sock.sendMessage(jid, {
+                text: `📸 *Send image with .nanopro*\n\nCurrent: ${images.length}/4\n\nWhen done: .nanopro done <prompt>`
+            });
+
+            return true;
+
+        }
+
+        if (images.length >= 4) {
+
+            await sock.sendMessage(jid, {
+                text: "❌ *Max 4 images reached*\nUse: .nanopro done <prompt>"
+            });
+
+            return true;
+
+        }
+
+        const link = await uploadToCdn(media.buffer);
+
+        if (!link) {
+
+            await sock.sendMessage(jid, {
+                text: "❌ Failed to upload that image, try again."
+            });
+
+            return true;
+
+        }
+
+        images.push(link);
+
+        await sock.sendMessage(jid, {
+            react: { text: "📥", key: msg.key }
+        });
+
+        await sock.sendMessage(jid, {
+            text: `✅ *Image added!* (${images.length}/4)\n\n${images.length === 1 ? "📸 Send another image" : images.length < 4 ? `📸 ${4 - images.length} more needed` : "🎨 Ready! Use: *.nanopro done <prompt>*"}`
+        });
+
+        return true;
+
+    } catch (err) {
+
+        console.log(
+            chalk.red("NANOPRO ERROR:", err.message)
+        );
+
+        await sock.sendMessage(jid, {
+            text: `❌ Nanopro failed: ${err.message}`
+        });
+
+        return true;
+
+    }
+
+                    }
+
                     case "recover_view_once":
         case "delete_message":
         case "moderate":

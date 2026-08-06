@@ -2196,7 +2196,7 @@ else if (response.action === "update_prefix") {
 
                 }
 
-                if (response.reply) {
+                if (response.reply || response.action) {
 
     const handled = await executeClientAction({
     action: response.action,
@@ -2206,7 +2206,9 @@ else if (response.action === "update_prefix") {
     msg,
     sender,
     groupMetadata,
-    message: msg.message
+    message: msg.message,
+    prompt: response.prompt,
+    input: response.input
 });
 
     if (response.levelUp) {
