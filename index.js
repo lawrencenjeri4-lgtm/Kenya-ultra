@@ -2199,15 +2199,15 @@ else if (response.action === "update_prefix") {
                 if (response.reply) {
 
     const handled = await executeClientAction({
-        action: response.action,
-        reply: response.reply,
-        deleteTrigger: response.deleteTrigger,
-        kickTarget: response.kickTarget,
-        sock,
-        jid,
-        msg,
-        sender
-    });
+    action: response.action,
+    reply: response.reply,
+    sock,
+    jid,
+    msg,
+    sender,
+    groupMetadata,
+    message: msg.message
+});
 
     if (response.levelUp) {
 
