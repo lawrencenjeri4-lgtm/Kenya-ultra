@@ -5,6 +5,205 @@ import os from "os";
 import axios from "axios";
 import { spawn, spawnSync } from "child_process";
 
+// ============================================================
+// Auto-reply
+// ============================================================
+
+const AUTOREPLY_PATH = path.join(process.cwd(), "autoreply.json");
+const AUTOREPLY_COOLDOWN_MS = 5 * 60 * 1000; // 5 min per contact
+
+function loadAutoReply() {
+
+    if (!fs.existsSync(AUTOREPLY_PATH)) {
+
+        return {
+            enabled: false,
+            dm: true,
+            groupMention: true,
+            message: "🤖 Auto-reply: I'm unavailable right now. I'll get back to you soon!",
+            schedule: null,
+            cooldowns: {}
+        };
+
+    }
+
+    try {
+        return JSON.parse(fs.readFileSync(AUTOREPLY_PATH, "utf8"));
+    } catch (_) {
+        return { enabled: false, dm: true, groupMention: true, message: "", schedule: null, cooldowns: {} };
+    }
+
+}
+
+function saveAutoReply(cfg) {
+    fs.writeFileSync(AUTOREPLY_PATH, JSON.stringify(cfg, null, 2));
+}
+
+// schedule format: "HH:MM-HH:MM", handles ranges that cross midnight
+function isInAutoReplySchedule(cfg) {
+
+    if (!cfg.schedule || !cfg.schedule.includes("-")) return true;
+
+    const [start, end] = cfg.schedule.split("-");
+    const [sh, sm] = start.split(":").map(Number);
+    const [eh, em] = end.split(":").map(Number);
+
+    if ([sh, sm, eh, em].some(Number.isNaN)) return true;
+
+    const now = new Date();
+    const nowMin = now.getHours() * 60 + now.getMinutes();
+    const startMin = sh * 60 + sm;
+    const endMin = eh * 60 + em;
+
+    if (startMin > endMin) return nowMin >= startMin || nowMin <= endMin;
+    return nowMin >= startMin && nowMin <= endMin;
+
+}
+
+/**
+ * Call on every incoming (non-fromMe) message. Returns
+ * { message, mentionedJid } to send, or null if auto-reply
+ * shouldn't fire for this message.
+ */
+export function checkAutoReply(msg, botIds) {
+
+    const cfg = loadAutoReply();
+
+    if (!cfg.enabled || !isInAutoReplySchedule(cfg)) return null;
+    if (msg.key.fromMe) return null;
+
+    const jid = msg.key.remoteJid;
+    const sender = msg.key.participant || jid;
+    const isGroup = jid.endsWith("@g.us");
+
+    const isMentioned =
+        isGroup &&
+        (msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [])
+            .some((id) => botIds.includes(id));
+
+    const triggerDM = !isGroup && cfg.dm;
+    const triggerGroup = isGroup && cfg.groupMention && isMentioned;
+
+    if (!triggerDM && !triggerGroup) return null;
+
+    const key = `${sender}-${jid}`;
+    const last = cfg.cooldowns[key] || 0;
+
+    if (Date.now() - last < AUTOREPLY_COOLDOWN_MS) return null;
+
+    cfg.cooldowns[key] = Date.now();
+    saveAutoReply(cfg);
+
+    return {
+        message: cfg.message,
+        mentionedJid: isGroup ? [sender] : []
+    };
+
+}
+
+/**
+ * Handles ".autoreply <subcommand>" locally (owner-only, checked by
+ * the caller via msg.key.fromMe). Returns the reply text to send.
+ */
+export function handleAutoReplyCommand(args) {
+
+    const cfg = loadAutoReply();
+    const sub = (args[0] || "").toLowerCase();
+
+    switch (sub) {
+
+        case "on":
+            cfg.enabled = true;
+            saveAutoReply(cfg);
+            return "✅ Auto-reply turned *ON*.";
+
+        case "off":
+            cfg.enabled = false;
+            saveAutoReply(cfg);
+            return "✅ Auto-reply turned *OFF*.";
+
+        case "dm":
+            cfg.dm = (args[1] || "").toLowerCase() !== "off";
+            saveAutoReply(cfg);
+            return `✅ DM auto-reply: *${cfg.dm ? "ON" : "OFF"}*`;
+
+        case "group":
+            cfg.groupMention = (args[1] || "").toLowerCase() !== "off";
+            saveAutoReply(cfg);
+            return `✅ Group-mention auto-reply: *${cfg.groupMention ? "ON" : "OFF"}*`;
+
+        case "setmsg": {
+
+            const text = args.slice(1).join(" ").trim();
+
+            if (!text) return "❌ Provide a message.\nExample:\n.autoreply setmsg I'm away, back soon!";
+
+            cfg.message = text;
+            saveAutoReply(cfg);
+            return "✅ Auto-reply message updated.";
+
+        }
+
+        case "schedule": {
+
+            const value = args[1];
+
+            if (!value || value.toLowerCase() === "off") {
+                cfg.schedule = null;
+                saveAutoReply(cfg);
+                return "✅ Schedule cleared — auto-reply active any time it's ON.";
+            }
+
+            if (!/^\d{1,2}:\d{2}-\d{1,2}:\d{2}$/.test(value)) {
+                return "❌ Use the format HH:MM-HH:MM\nExample:\n.autoreply schedule 22:00-06:00";
+            }
+
+            cfg.schedule = value;
+            saveAutoReply(cfg);
+            return `✅ Schedule set: *${value}*`;
+
+        }
+
+        case "resetcooldowns":
+            cfg.cooldowns = {};
+            saveAutoReply(cfg);
+            return "✅ Cooldowns cleared.";
+
+        case "status":
+        case undefined:
+        case "":
+            return (
+`╭⊷ 🤖 *AUTO-REPLY*
+
+│
+
+├⊷ Status: *${cfg.enabled ? "ON ✅" : "OFF ❌"}*
+├⊷ DM: *${cfg.dm ? "ON" : "OFF"}*
+├⊷ Group mentions: *${cfg.groupMention ? "ON" : "OFF"}*
+├⊷ Schedule: *${cfg.schedule || "Always"}*
+├⊷ Message: ${cfg.message}
+
+│
+
+├⊷ *.autoreply on/off*
+├⊷ *.autoreply dm on/off*
+├⊷ *.autoreply group on/off*
+├⊷ *.autoreply setmsg <text>*
+├⊷ *.autoreply schedule HH:MM-HH:MM* (or off)
+├⊷ *.autoreply resetcooldowns*
+
+│
+
+╰⊷ 🐺 *Kenya-Ultra*`
+            );
+
+        default:
+            return "❌ Unknown subcommand. Use *.autoreply status* to see options.";
+
+    }
+
+}
+
 const UPDATE_REPO = process.env.UPDATE_REPO || "lawrencenjeri4-lgtm/Kenya-Ultra";
 const UPDATE_BRANCH = process.env.UPDATE_BRANCH || "main";
 

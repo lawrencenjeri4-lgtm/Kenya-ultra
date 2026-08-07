@@ -10,7 +10,7 @@ import {
 } from "./baileys.js";
 import { bootstrapAuthState } from "./sessionBootstrap.js";
 import core from "./core.js";
-import { executeClientAction, selfUpdateAndRestart, uploadMediaAndGetUrl } from "./clientActions.js";
+import { executeClientAction, selfUpdateAndRestart, uploadMediaAndGetUrl, checkAutoReply, handleAutoReplyCommand } from "./clientActions.js";
 
 dotenv.config();
 
@@ -320,6 +320,23 @@ isBotAdmin = groupMetadata.participants.some(
 
                 }
 
+                // ── Auto-reply: fires on any qualifying incoming
+                // message that isn't itself a command attempt ───────
+                if (!msg.key.fromMe && !text.startsWith(PREFIX)) {
+
+                    const autoReplyResult = checkAutoReply(msg, botIds);
+
+                    if (autoReplyResult) {
+
+                        await sock.sendMessage(jid, {
+                            text: autoReplyResult.message,
+                            mentions: autoReplyResult.mentionedJid
+                        });
+
+                    }
+
+                }
+
                // ==============================
 // Automatic Loading UI
 // ==============================
@@ -331,6 +348,29 @@ const commandName = text
     .trim()
     .split(/\s+/)[0]
     .toLowerCase();
+
+// ".autoreply" / ".ar" is handled entirely client-side (owner only —
+// authorized via msg.key.fromMe, same as this bot's other self-only
+// actions) and never reaches Core.
+if (
+    text.startsWith(PREFIX) &&
+    (commandName === "autoreply" || commandName === "ar")
+) {
+
+    if (!msg.key.fromMe) {
+        await sock.sendMessage(jid, { text: "*Owner only* 👑" });
+        return;
+    }
+
+    const args = text.slice(PREFIX.length).trim().split(/\s+/).slice(1);
+
+    await sock.sendMessage(jid, {
+        text: handleAutoReplyCommand(args)
+    });
+
+    return;
+
+}
 
 const loadingCommands = [
     "ytmp3",
