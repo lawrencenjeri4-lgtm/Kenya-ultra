@@ -4,7 +4,6 @@ import path from "path";
 import os from "os";
 import axios from "axios";
 import { spawn, spawnSync } from "child_process";
-import { downloadQuotedMedia } from "./baileys.js";
 
 // ============================================================
 // Auto-reply
@@ -208,6 +207,12 @@ export function handleAutoReplyCommand(args) {
 const UPDATE_REPO = process.env.UPDATE_REPO || "lawrencenjeri4-lgtm/Kenya-Ultra";
 const UPDATE_BRANCH = process.env.UPDATE_BRANCH || "main";
 
+// Same CORE_URL already used by core.js — not a new variable, just
+// referenced again here so this file doesn't need to import core.js
+const CORE_URL =
+    process.env.CORE_URL ||
+    "https://kenya-ultra-core-git-900495233478.europe-west1.run.app";
+
 // Never overwrite/delete these when copying the fresh code over
 const UPDATE_EXCLUDE = new Set([
     "node_modules",
@@ -324,55 +329,6 @@ const EXT_FROM_MIME = {
     "video/3gpp": "3gp"
 };
 
-async function uploadToCatbox(buffer, mimetype, ext) {
-
-    const form = new FormData();
-    form.append("reqtype", "fileupload");
-    form.append("fileToUpload", new Blob([buffer], { type: mimetype }), `file.${ext}`);
-
-    const res = await fetch("https://catbox.moe/user/api.php", {
-        method: "POST",
-        headers: {
-            // catbox's anti-abuse filter blocks requests that don't
-            // look browser-like — this alone fixes it in many cases
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        },
-        body: form
-    });
-
-    const text = (await res.text()).trim();
-
-    if (!text.startsWith("http")) {
-        throw new Error(text || "catbox upload failed");
-    }
-
-    return text;
-
-}
-
-async function uploadTo0x0(buffer, mimetype, ext) {
-
-    const form = new FormData();
-    form.append("file", new Blob([buffer], { type: mimetype }), `file.${ext}`);
-
-    const res = await fetch("https://0x0.st", {
-        method: "POST",
-        headers: {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-        },
-        body: form
-    });
-
-    const text = (await res.text()).trim();
-
-    if (!text.startsWith("http")) {
-        throw new Error(text || "0x0.st upload failed");
-    }
-
-    return text;
-
-}
-
 async function uploadToTmpfiles(buffer, mimetype, ext) {
 
     const form = new FormData();
@@ -395,15 +351,10 @@ async function uploadToTmpfiles(buffer, mimetype, ext) {
 }
 
 /**
- * Uploads a buffer and returns a direct URL, no signup/API key needed.
- * Tries hosts in order of how long the link lasts:
- *   1. catbox.moe   — permanent, but blocks a lot of datacenter/VPS
- *      IPs (common on hosting panels like Pterodactyl) with a
- *      generic "Invalid uploader" error.
- *   2. 0x0.st        — retention scales with file size/popularity
- *      (minimum ~30 days), rarely blocks server IPs.
- *   3. tmpfiles.org  — always accepts server uploads, but links
- *      expire in 1 hour. Last-resort only.
+ * Uploads a buffer to Core's own /media/upload endpoint and returns
+ * a direct URL on your own domain (served from Core's /assets static
+ * folder) — no third-party host involved. Falls back to tmpfiles.org
+ * only if Core itself is unreachable, so .url still works.
  */
 export async function uploadMediaAndGetUrl(buffer, mimetype) {
 
@@ -411,24 +362,27 @@ export async function uploadMediaAndGetUrl(buffer, mimetype) {
 
     try {
 
-        return await uploadToCatbox(buffer, mimetype, ext);
+        const res = await fetch(`${CORE_URL}/media/upload`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                mimetype,
+                data: buffer.toString("base64")
+            })
+        });
+
+        const json = await res.json();
+
+        if (!json?.success || !json?.url) {
+            throw new Error(json?.error || "Core upload failed");
+        }
+
+        return json.url;
 
     } catch (err) {
 
         console.log(
-            chalk.yellow(`Catbox upload failed (${err.message}), trying 0x0.st...`)
-        );
-
-    }
-
-    try {
-
-        return await uploadTo0x0(buffer, mimetype, ext);
-
-    } catch (err) {
-
-        console.log(
-            chalk.yellow(`0x0.st upload failed (${err.message}), falling back to tmpfiles...`)
+            chalk.yellow(`Core upload failed (${err.message}), falling back to tmpfiles...`)
         );
 
         return await uploadToTmpfiles(buffer, mimetype, ext);
@@ -443,8 +397,7 @@ export async function executeClientAction({
     sock,
     jid,
     msg,
-    sender,
-    mediaType
+    sender
 }) {
 
     // ==========================
@@ -466,28 +419,12 @@ export async function executeClientAction({
 
             case "audio":
 
-                // NOTE: contextInfo.externalAdReply attached directly
-                // to an audio message is unreliable — it renders fine
-                // on the sender's own device but frequently fails to
-                // relay to other recipients (shows as "message
-                // deleted" for them). Send the rich preview as its
-                // own plain text message instead, which does relay
-                // reliably, then send a clean audio message.
-
-                if (reply.contextInfo) {
-
-                    await sock.sendMessage(jid, {
-                        text: reply.caption || " ",
-                        contextInfo: reply.contextInfo
-                    });
-
-                }
-
                 await sock.sendMessage(jid, {
                     audio: { url: reply.url },
                     mimetype: reply.mimetype,
                     fileName: reply.fileName,
-                    caption: reply.contextInfo ? undefined : reply.caption
+                    caption: reply.caption,
+                    contextInfo: reply.contextInfo || undefined
                 });
 
                 if (reply.alsoDocument) {
@@ -504,22 +441,12 @@ export async function executeClientAction({
 
             case "video":
 
-                // Same contextInfo-on-media relay issue as audio above.
-
-                if (reply.contextInfo) {
-
-                    await sock.sendMessage(jid, {
-                        text: reply.caption || " ",
-                        contextInfo: reply.contextInfo
-                    });
-
-                }
-
                 await sock.sendMessage(jid, {
                     video: { url: reply.url },
                     mimetype: reply.mimetype,
                     fileName: reply.fileName,
-                    caption: reply.contextInfo ? undefined : reply.caption
+                    caption: reply.caption,
+                    contextInfo: reply.contextInfo || undefined
                 });
 
                 if (reply.alsoDocument) {
@@ -748,130 +675,6 @@ END:VCARD`;
     // ==========================
 
     switch (action) {
-
-        case "get_media_url": {
-
-            try {
-
-                await sock.sendMessage(jid, {
-                    text: "ℹ️ 📤 Uploading, one sec..."
-                });
-
-                const quoted =
-                    msg.message
-                        ?.extendedTextMessage
-                        ?.contextInfo
-                        ?.quotedMessage;
-
-                const media = await downloadQuotedMedia(quoted);
-
-                if (!media) {
-
-                    await sock.sendMessage(jid, {
-                        text: "❌ Couldn't download that image/video."
-                    });
-
-                    return true;
-
-                }
-
-                const mimetype =
-                    media.type === "video"
-                        ? "video/mp4"
-                        : "image/jpeg";
-
-                const url = await uploadMediaAndGetUrl(media.buffer, mimetype);
-
-                await sock.sendMessage(
-                    jid,
-                    { text: `🔗 *Direct URL:*\n${url}` },
-                    { quoted: msg }
-                );
-
-                return true;
-
-            } catch (err) {
-
-                console.log(
-                    chalk.red("GET MEDIA URL ERROR:", err.message)
-                );
-
-                await sock.sendMessage(jid, {
-                    text: `❌ Failed to get a URL: ${err.message}`
-                });
-
-                return true;
-
-            }
-
-        }
-
-        case "group_status": {
-
-            try {
-
-                const quoted =
-                    msg.message
-                        ?.extendedTextMessage
-                        ?.contextInfo
-                        ?.quotedMessage;
-
-                // Plain text status (no media) — just send the built caption.
-                if (!mediaType || !quoted) {
-
-                    await sock.sendMessage(jid, {
-                        text: reply.text
-                    });
-
-                    return true;
-
-                }
-
-                const media = await downloadQuotedMedia(quoted);
-
-                if (!media) {
-
-                    await sock.sendMessage(jid, {
-                        text: "❌ Failed to download that media."
-                    });
-
-                    return true;
-
-                }
-
-                if (mediaType === "video") {
-
-                    await sock.sendMessage(jid, {
-                        video: media.buffer,
-                        caption: reply.text
-                    });
-
-                } else {
-
-                    await sock.sendMessage(jid, {
-                        image: media.buffer,
-                        caption: reply.text
-                    });
-
-                }
-
-                return true;
-
-            } catch (err) {
-
-                console.log(
-                    chalk.red("GROUP STATUS ERROR:", err.message)
-                );
-
-                await sock.sendMessage(jid, {
-                    text: "❌ Failed to post group status."
-                });
-
-                return true;
-
-            }
-
-        }
 
         case "recover_view_once":
         case "delete_message":
