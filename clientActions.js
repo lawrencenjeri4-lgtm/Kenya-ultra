@@ -464,12 +464,28 @@ export async function executeClientAction({
 
             case "audio":
 
+                // NOTE: contextInfo.externalAdReply attached directly
+                // to an audio message is unreliable — it renders fine
+                // on the sender's own device but frequently fails to
+                // relay to other recipients (shows as "message
+                // deleted" for them). Send the rich preview as its
+                // own plain text message instead, which does relay
+                // reliably, then send a clean audio message.
+
+                if (reply.contextInfo) {
+
+                    await sock.sendMessage(jid, {
+                        text: reply.caption || " ",
+                        contextInfo: reply.contextInfo
+                    });
+
+                }
+
                 await sock.sendMessage(jid, {
                     audio: { url: reply.url },
                     mimetype: reply.mimetype,
                     fileName: reply.fileName,
-                    caption: reply.caption,
-                    contextInfo: reply.contextInfo || undefined
+                    caption: reply.contextInfo ? undefined : reply.caption
                 });
 
                 if (reply.alsoDocument) {
@@ -486,12 +502,22 @@ export async function executeClientAction({
 
             case "video":
 
+                // Same contextInfo-on-media relay issue as audio above.
+
+                if (reply.contextInfo) {
+
+                    await sock.sendMessage(jid, {
+                        text: reply.caption || " ",
+                        contextInfo: reply.contextInfo
+                    });
+
+                }
+
                 await sock.sendMessage(jid, {
                     video: { url: reply.url },
                     mimetype: reply.mimetype,
                     fileName: reply.fileName,
-                    caption: reply.caption,
-                    contextInfo: reply.contextInfo || undefined
+                    caption: reply.contextInfo ? undefined : reply.caption
                 });
 
                 if (reply.alsoDocument) {
