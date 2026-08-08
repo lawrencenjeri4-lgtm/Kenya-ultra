@@ -2161,125 +2161,6 @@ else if (response.action === "update_prefix") {
 
 }
 
-                else if (response.action === "post_group_status") {
-
-    try {
-
-        const quotedContent =
-            msg.message
-                ?.extendedTextMessage
-                ?.contextInfo
-                ?.quotedMessage;
-
-        const caption = response.caption || "";
-
-        let media = null;
-
-        if (quotedContent) {
-            media = await downloadMessageMedia(quotedContent);
-        }
-
-        if (quotedContent && !media) {
-
-            await sock.sendMessage(jid, {
-                text: "❌ Couldn't read that reply — only images, videos, and audio are supported for status posts."
-            });
-
-            return;
-
-        }
-
-        // Real "Group Status" (posts inside the group itself, visible
-        // only to its members) is a newer WhatsApp feature and goes to
-        // the GROUP's own jid via a groupStatusMessage content key —
-        // this is NOT the old status@broadcast + statusJidList
-        // mechanism (that only affects delivery on your normal,
-        // account-wide Status, not a group-scoped one).
-        //
-        // Support for groupStatusMessage depends on whether this
-        // exact baileys version has shipped it yet. If it hasn't,
-        // this will most likely throw and land in the catch block
-        // below rather than silently posting to the wrong place.
-        let content;
-
-        if (!media) {
-
-            content = {
-                groupStatusMessage: {
-                    text: caption,
-                    backgroundColor: "#000000",
-                    font: 0
-                }
-            };
-
-        }
-
-        else if (media.type === "image") {
-
-            content = {
-                groupStatusMessage: {
-                    image: media.buffer,
-                    caption
-                }
-            };
-
-        }
-
-        else if (media.type === "video" || media.type === "gif") {
-
-            content = {
-                groupStatusMessage: {
-                    video: media.buffer,
-                    caption
-                }
-            };
-
-        }
-
-        else if (media.type === "audio" || media.type === "ptt") {
-
-            content = {
-                groupStatusMessage: {
-                    audio: media.buffer,
-                    mimetype: "audio/mp4",
-                    ptt: false
-                }
-            };
-
-        }
-
-        else {
-
-            await sock.sendMessage(jid, {
-                text: "❌ That media type isn't supported for status posts — use an image, video, or audio."
-            });
-
-            return;
-
-        }
-
-        await sock.sendMessage(jid, content);
-
-        await sock.sendMessage(jid, {
-            text: "✅ Uploaded to this group's status"
-        });
-
-    } catch (error) {
-
-        console.log(
-            chalk.red("❌ Group status post failed:", error.message)
-        );
-
-        await sock.sendMessage(jid, {
-            text: "❌ Failed to post to group status. This baileys version may not support Group Status yet (`groupStatusMessage`) — check the console for the exact error."
-        });
-
-    }
-
-    return;
-
-}
-
                 else if (response.action === "recover_view_once") {
 
     try {
@@ -2368,13 +2249,14 @@ else if (response.action === "update_prefix") {
 
                 }
 
-                if (response.reply) {
+                if (response.reply || response.action) {
 
     const handled = await executeClientAction({
         action: response.action,
         reply: response.reply,
         deleteTrigger: response.deleteTrigger,
         kickTarget: response.kickTarget,
+        mediaType: response.mediaType,
         sock,
         jid,
         msg,

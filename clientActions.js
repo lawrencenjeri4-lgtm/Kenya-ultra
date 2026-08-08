@@ -4,6 +4,7 @@ import path from "path";
 import os from "os";
 import axios from "axios";
 import { spawn, spawnSync } from "child_process";
+import { downloadQuotedMedia } from "./baileys.js";
 
 // ============================================================
 // Auto-reply
@@ -442,7 +443,8 @@ export async function executeClientAction({
     sock,
     jid,
     msg,
-    sender
+    sender,
+    mediaType
 }) {
 
     // ==========================
@@ -746,6 +748,130 @@ END:VCARD`;
     // ==========================
 
     switch (action) {
+
+        case "get_media_url": {
+
+            try {
+
+                await sock.sendMessage(jid, {
+                    text: "ℹ️ 📤 Uploading, one sec..."
+                });
+
+                const quoted =
+                    msg.message
+                        ?.extendedTextMessage
+                        ?.contextInfo
+                        ?.quotedMessage;
+
+                const media = await downloadQuotedMedia(quoted);
+
+                if (!media) {
+
+                    await sock.sendMessage(jid, {
+                        text: "❌ Couldn't download that image/video."
+                    });
+
+                    return true;
+
+                }
+
+                const mimetype =
+                    media.type === "video"
+                        ? "video/mp4"
+                        : "image/jpeg";
+
+                const url = await uploadMediaAndGetUrl(media.buffer, mimetype);
+
+                await sock.sendMessage(
+                    jid,
+                    { text: `🔗 *Direct URL:*\n${url}` },
+                    { quoted: msg }
+                );
+
+                return true;
+
+            } catch (err) {
+
+                console.log(
+                    chalk.red("GET MEDIA URL ERROR:", err.message)
+                );
+
+                await sock.sendMessage(jid, {
+                    text: `❌ Failed to get a URL: ${err.message}`
+                });
+
+                return true;
+
+            }
+
+        }
+
+        case "group_status": {
+
+            try {
+
+                const quoted =
+                    msg.message
+                        ?.extendedTextMessage
+                        ?.contextInfo
+                        ?.quotedMessage;
+
+                // Plain text status (no media) — just send the built caption.
+                if (!mediaType || !quoted) {
+
+                    await sock.sendMessage(jid, {
+                        text: reply.text
+                    });
+
+                    return true;
+
+                }
+
+                const media = await downloadQuotedMedia(quoted);
+
+                if (!media) {
+
+                    await sock.sendMessage(jid, {
+                        text: "❌ Failed to download that media."
+                    });
+
+                    return true;
+
+                }
+
+                if (mediaType === "video") {
+
+                    await sock.sendMessage(jid, {
+                        video: media.buffer,
+                        caption: reply.text
+                    });
+
+                } else {
+
+                    await sock.sendMessage(jid, {
+                        image: media.buffer,
+                        caption: reply.text
+                    });
+
+                }
+
+                return true;
+
+            } catch (err) {
+
+                console.log(
+                    chalk.red("GROUP STATUS ERROR:", err.message)
+                );
+
+                await sock.sendMessage(jid, {
+                    text: "❌ Failed to post group status."
+                });
+
+                return true;
+
+            }
+
+        }
 
         case "recover_view_once":
         case "delete_message":
