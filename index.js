@@ -13,7 +13,7 @@ import {
 } from "./baileys.js";
 import { bootstrapAuthState } from "./sessionBootstrap.js";
 import core from "./core.js";
-import { executeClientAction } from "./clientActions.js";
+import { executeClientAction, selfUpdateAndRestart, uploadMediaAndGetUrl, checkAutoReply, handleAutoReplyCommand } from "./clientActions.js";
 import { createSticker, retagSticker } from "./stickerUtils.js";
 
 dotenv.config();
@@ -847,6 +847,45 @@ const commandName = text
     .trim()
     .split(/\s+/)[0]
     .toLowerCase();
+
+// ── Auto-reply: fires on any qualifying incoming message that
+// isn't itself a command attempt ────────────────────────────────
+if (!msg.key.fromMe && !text.startsWith(PREFIX)) {
+
+    const autoReplyResult = checkAutoReply(msg, botIds);
+
+    if (autoReplyResult) {
+
+        await sock.sendMessage(jid, {
+            text: autoReplyResult.message,
+            mentions: autoReplyResult.mentionedJid
+        });
+
+    }
+
+}
+
+// ".autoreply" / ".ar" is handled entirely client-side (owner only —
+// authorized via msg.key.fromMe) and never reaches Core.
+if (
+    text.startsWith(PREFIX) &&
+    (commandName === "autoreply" || commandName === "ar")
+) {
+
+    if (!msg.key.fromMe) {
+        await sock.sendMessage(jid, { text: "*Owner only* 👑" });
+        return;
+    }
+
+    const arArgs = text.slice(PREFIX.length).trim().split(/\s+/).slice(1);
+
+    await sock.sendMessage(jid, {
+        text: handleAutoReplyCommand(arArgs)
+    });
+
+    return;
+
+}
 
 const loadingCommands = [
     "ytmp3",
@@ -2249,14 +2288,194 @@ else if (response.action === "update_prefix") {
 
                 }
 
-                if (response.reply || response.action) {
+                else if (response.action === "post_group_status") {
+
+    try {
+
+        const quoted =
+            msg.message
+                ?.extendedTextMessage
+                ?.contextInfo
+                ?.quotedMessage;
+
+        if (!quoted) {
+
+            await sock.sendMessage(jid, {
+                text: "❌ No quoted photo found."
+            });
+
+            return;
+
+        }
+
+        const media =
+            await downloadQuotedMedia(quoted);
+
+        if (!media || media.type !== "image") {
+
+            await sock.sendMessage(jid, {
+                text: "❌ Failed to download the photo."
+            });
+
+            return;
+
+        }
+
+        const caption =
+`╭⊷ 📢 *GROUP STATUS*
+│
+├⊷ ${response.captionText || "📸"}
+│
+├⊷ 👤 *Posted by:* ${response.postedBy || "Admin"}
+├⊷ 🕒 *When:* ${response.timestamp || ""}
+│
+╰⊷ 🐺 *Powered by Kenya-Ultra 👑*`;
+
+        await sock.sendMessage(jid, {
+
+            image: media.buffer,
+
+            caption
+
+        });
+
+        console.log("✅ Group status (photo) posted.");
+
+    }
+
+    catch (err) {
+
+        console.log(err);
+
+        await sock.sendMessage(jid, {
+
+            text:
+                "❌ Failed to post status."
+
+        });
+
+    }
+
+                }
+
+                else if (response.action === "self_update") {
+
+    try {
+
+        await selfUpdateAndRestart({
+
+            onProgress: async (text) => {
+
+                try {
+                    await sock.sendMessage(jid, { text });
+                } catch (_) {}
+
+            }
+
+        });
+
+        // Process exits inside selfUpdateAndRestart once the
+        // respawned instance has been launched — nothing runs
+        // after this point.
+
+    }
+
+    catch (err) {
+
+        console.log(err);
+
+        await sock.sendMessage(jid, {
+
+            text:
+                `❌ Update failed: ${err.message || "Unknown error"}`
+
+        });
+
+    }
+
+                }
+
+                else if (response.action === "get_media_url") {
+
+    try {
+
+        const quoted =
+            msg.message
+                ?.extendedTextMessage
+                ?.contextInfo
+                ?.quotedMessage;
+
+        const mediaMsg =
+            quoted?.imageMessage || quoted?.videoMessage;
+
+        if (!quoted || !mediaMsg) {
+
+            await sock.sendMessage(jid, {
+                text: "❌ No quoted image/video found."
+            });
+
+            return;
+
+        }
+
+        const media =
+            await downloadQuotedMedia(quoted);
+
+        if (!media) {
+
+            await sock.sendMessage(jid, {
+                text: "❌ Failed to download the media."
+            });
+
+            return;
+
+        }
+
+        const link =
+            await uploadMediaAndGetUrl(
+                media.buffer,
+                mediaMsg.mimetype || "application/octet-stream"
+            );
+
+        await sock.sendMessage(jid, {
+
+            text:
+`╭⊷ 🔗 *MEDIA URL*
+
+│
+
+├⊷ ${link}
+
+│
+
+╰⊷ 🐺 *Kenya-Ultra*`
+
+        });
+
+    }
+
+    catch (err) {
+
+        console.log(err);
+
+        await sock.sendMessage(jid, {
+
+            text:
+                "❌ Failed to get a URL for that media."
+
+        });
+
+    }
+
+                }
+
+                if (response.reply) {
 
     const handled = await executeClientAction({
         action: response.action,
         reply: response.reply,
         deleteTrigger: response.deleteTrigger,
         kickTarget: response.kickTarget,
-        mediaType: response.mediaType,
         sock,
         jid,
         msg,
