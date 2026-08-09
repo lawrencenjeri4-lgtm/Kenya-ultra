@@ -2220,8 +2220,17 @@ else if (response.action === "update_prefix") {
 
         }
 
+        // Same unwrap needed here as on Core's .vv command — the
+        // actual media lives nested inside the view-once wrapper,
+        // not at the top level of `quoted`.
+        const unwrapped =
+            quoted.viewOnceMessageV2Extension?.message ||
+            quoted.viewOnceMessageV2?.message ||
+            quoted.viewOnceMessage?.message ||
+            quoted;
+
         const media =
-            await downloadQuotedMedia(quoted);
+            await downloadQuotedMedia(unwrapped);
 
         if (!media) {
 
