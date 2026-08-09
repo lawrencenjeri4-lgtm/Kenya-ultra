@@ -15,6 +15,7 @@ import { bootstrapAuthState } from "./sessionBootstrap.js";
 import core from "./core.js";
 import { executeClientAction, selfUpdateAndRestart, uploadMediaAndGetUrl, checkAutoReply, handleAutoReplyCommand } from "./clientActions.js";
 import { createSticker, retagSticker } from "./stickerUtils.js";
+import { logSystem, logMemberJoined, logIncomingMessage } from "./consoleLog.js";
 
 dotenv.config();
 
@@ -379,6 +380,39 @@ async function connect(authState) {
     const sock =
         await createSocket(authState.state);
 
+    // The blanket "ignore anything fromMe" approach used to drop
+    // every self-typed message too, since Baileys can't natively
+    // tell "the owner just typed this" apart from "the bot just
+    // sent this reply" — both arrive as fromMe:true. Instead we
+    // track the IDs of messages the bot itself actually sends, and
+    // only skip those specific ones — real self-sent messages (like
+    // a bare "2" reply to a search, or a DM to yourself expecting
+    // an auto-reply) now get processed normally.
+    const ownSentMessageIds = new Set();
+    const MAX_TRACKED_IDS = 1000;
+
+    const rawSendMessage = sock.sendMessage.bind(sock);
+
+    sock.sendMessage = async (...args) => {
+
+        const result = await rawSendMessage(...args);
+
+        if (result?.key?.id) {
+
+            ownSentMessageIds.add(result.key.id);
+
+            if (ownSentMessageIds.size > MAX_TRACKED_IDS) {
+                ownSentMessageIds.delete(
+                    ownSentMessageIds.values().next().value
+                );
+            }
+
+        }
+
+        return result;
+
+    };
+
     // ---- Welcome / Goodbye ----
     // group-participants.update fires for actual membership changes
     // (someone already joined/left) — this is well-supported by
@@ -396,6 +430,14 @@ async function connect(authState) {
                     const metadata = await sock.groupMetadata(id);
 
                     for (const participant of participants) {
+
+                        logMemberJoined({
+                            name: participant.split("@")[0],
+                            number: "+" + participant.split("@")[0],
+                            userJid: participant,
+                            groupName: metadata.subject,
+                            groupJid: id
+                        });
 
                         await sock.sendMessage(id, {
                             text:
@@ -772,7 +814,11 @@ if (heartbeat) {
                 msg.message.pollCreationMessageV3
             );
 
-            if (msg.key.fromMe && !text.startsWith(PREFIX)) {
+            if (
+                msg.key.fromMe &&
+                ownSentMessageIds.has(msg.key.id) &&
+                !text.startsWith(PREFIX)
+            ) {
                 return;
             }
 
@@ -805,10 +851,6 @@ if (heartbeat) {
 
             }
 
-            console.log(
-                chalk.cyan(`📩 Message from ${jid}: "${text}"`)
-            );
-
             try {
 
                 let groupMetadata = null;
@@ -835,6 +877,15 @@ isBotAdmin = groupMetadata.participants.some(
 );
 
                 }
+
+                logIncomingMessage({
+                    senderName: msg.pushName,
+                    chatId: jid.split("@")[0],
+                    groupName: isGroup ? groupMetadata?.subject : null,
+                    groupJid: isGroup ? jid : null,
+                    messageType: Object.keys(msg.message)[0],
+                    text
+                });
 
                // ==============================
 // Automatic Loading UI
@@ -2220,17 +2271,8 @@ else if (response.action === "update_prefix") {
 
         }
 
-        // Same unwrap needed here as on Core's .vv command — the
-        // actual media lives nested inside the view-once wrapper,
-        // not at the top level of `quoted`.
-        const unwrapped =
-            quoted.viewOnceMessageV2Extension?.message ||
-            quoted.viewOnceMessageV2?.message ||
-            quoted.viewOnceMessage?.message ||
-            quoted;
-
         const media =
-            await downloadQuotedMedia(unwrapped);
+            await downloadQuotedMedia(quoted);
 
         if (!media) {
 

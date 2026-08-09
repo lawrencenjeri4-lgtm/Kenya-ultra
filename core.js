@@ -69,6 +69,29 @@ class KenyaUltraCore {
 
     }
 
+    async getGroupSettings(groupId) {
+
+        try {
+
+            const { data } = await axios.get(
+                `${CORE_URL}/settings/group/${groupId}`
+            );
+
+            return data.settings || {};
+
+        } catch (error) {
+
+            console.log(
+                "Failed to fetch group settings, using defaults:",
+                error.response?.data?.message || error.message
+            );
+
+            return {};
+
+        }
+
+    }
+
     async syncAuth(sessionId, creds) {
 
         try {
