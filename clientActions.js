@@ -417,10 +417,23 @@ export async function executeClientAction({
 
                 return true;
 
-            case "audio":
+            case "audio": {
+
+                // ==========================
+                // Fetch into a buffer ourselves instead of handing
+                // Baileys a raw URL — see the "download" case above
+                // for why (live-transcoded/streamed sources have no
+                // Content-Length until the response finishes, which
+                // Baileys' own internal fetch can choke on).
+                // ==========================
+
+                const { data: audioBuffer } = await axios.get(reply.url, {
+                    responseType: "arraybuffer",
+                    timeout: 120000
+                });
 
                 await sock.sendMessage(jid, {
-                    audio: { url: reply.url },
+                    audio: audioBuffer,
                     mimetype: reply.mimetype,
                     fileName: reply.fileName,
                     caption: reply.caption,
@@ -430,7 +443,7 @@ export async function executeClientAction({
                 if (reply.alsoDocument) {
 
                     await sock.sendMessage(jid, {
-                        document: { url: reply.url },
+                        document: audioBuffer,
                         mimetype: reply.mimetype,
                         fileName: reply.fileName
                     });
@@ -439,10 +452,17 @@ export async function executeClientAction({
 
                 return true;
 
-            case "video":
+            }
+
+            case "video": {
+
+                const { data: videoBuffer } = await axios.get(reply.url, {
+                    responseType: "arraybuffer",
+                    timeout: 120000
+                });
 
                 await sock.sendMessage(jid, {
-                    video: { url: reply.url },
+                    video: videoBuffer,
                     mimetype: reply.mimetype,
                     fileName: reply.fileName,
                     caption: reply.caption,
@@ -452,7 +472,7 @@ export async function executeClientAction({
                 if (reply.alsoDocument) {
 
                     await sock.sendMessage(jid, {
-                        document: { url: reply.url },
+                        document: videoBuffer,
                         mimetype: reply.mimetype,
                         fileName: reply.fileName
                     });
@@ -460,6 +480,8 @@ export async function executeClientAction({
                 }
 
                 return true;
+
+            }
 
             case "image": {
 
@@ -604,10 +626,30 @@ END:VCARD`;
                         }
                     } : undefined;
 
+                    // ==========================
+                    // Fetch the media into a buffer ourselves
+                    // instead of handing Baileys a raw URL to fetch
+                    // internally. This is required for:
+                    //   - live-transcoded/streamed sources (no
+                    //     Content-Length until the response
+                    //     finishes) that Baileys' own fetch can
+                    //     choke on
+                    //   - giving us an explicit, generous timeout
+                    //     instead of whatever default Baileys uses
+                    // A Buffer has a known size before sendMessage
+                    // is ever called, so WhatsApp's upload/encrypt
+                    // step has nothing ambiguous to fail on.
+                    // ==========================
+
+                    const { data: buffer } = await axios.get(reply.url, {
+                        responseType: "arraybuffer",
+                        timeout: 120000
+                    });
+
                     if (isAudio) {
 
                         await sock.sendMessage(jid, {
-                            audio: { url: reply.url },
+                            audio: buffer,
                             mimetype: reply.mimetype || "audio/mpeg",
                             fileName: reply.fileName || "audio.mp3",
                             caption,
@@ -617,7 +659,7 @@ END:VCARD`;
                     } else {
 
                         await sock.sendMessage(jid, {
-                            video: { url: reply.url },
+                            video: buffer,
                             mimetype: reply.mimetype || "video/mp4",
                             fileName: reply.fileName || "video.mp4",
                             caption,
