@@ -60,6 +60,24 @@ export function shouldReconnect(lastDisconnect) {
 
 }
 
+// A statusCode 440 (connectionReplaced) means another connection
+// logged into this exact session and took over — WhatsApp doesn't
+// allow two live connections on one session, so this always means
+// something else (a second deployment, an old container that never
+// fully shut down, someone linking the session as a companion device
+// elsewhere) just kicked this instance off. Worth a loud, distinct
+// log line since it's a real account-health signal, not a routine
+// network drop, and reconnecting immediately here would just start a
+// fight between the two instances.
+export function isConnectionReplaced(lastDisconnect) {
+
+    const statusCode =
+        lastDisconnect?.error?.output?.statusCode;
+
+    return statusCode === DisconnectReason.connectionReplaced;
+
+}
+
 const DEFAULT_CHANNEL_LINK =
     "https://whatsapp.com/channel/0029VbDbTKcG8l5JKqrsMS2f";
 
