@@ -421,36 +421,75 @@ export async function executeClientAction({
 
                 // ==========================
                 // Fetch into a buffer ourselves instead of handing
-                // Baileys a raw URL — see the "download" case above
-                // for why (live-transcoded/streamed sources have no
+                // Baileys a raw URL — see the "download" case for why
+                // (live-transcoded/streamed sources have no
                 // Content-Length until the response finishes, which
                 // Baileys' own internal fetch can choke on).
+                //
+                // PATCHED: this case previously had no try/catch, so
+                // any failure here (403, timeout, bad buffer) escaped
+                // to the generic outer handler in index.js and printed
+                // as a blank "COMMAND ERROR:" with nothing delivered
+                // to the user. Now caught locally, logged with actual
+                // detail, and reacted with ❌ so the user at least
+                // knows it failed instead of getting silence.
+                //
+                // Also added a browser User-Agent — CDN links (Google
+                // videoplayback, etc.) sometimes reject requests with
+                // no User-Agent header at all.
                 // ==========================
 
-                const { data: audioBuffer } = await axios.get(reply.url, {
-                    responseType: "arraybuffer",
-                    timeout: 120000
-                });
+                try {
 
-                await sock.sendMessage(jid, {
-                    audio: audioBuffer,
-                    mimetype: reply.mimetype,
-                    fileName: reply.fileName,
-                    caption: reply.caption,
-                    contextInfo: reply.contextInfo || undefined
-                });
-
-                if (reply.alsoDocument) {
-
-                    await sock.sendMessage(jid, {
-                        document: audioBuffer,
-                        mimetype: reply.mimetype,
-                        fileName: reply.fileName
+                    const { data: audioBuffer } = await axios.get(reply.url, {
+                        responseType: "arraybuffer",
+                        timeout: 120000,
+                        headers: {
+                            "User-Agent":
+                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+                        }
                     });
 
-                }
+                    await sock.sendMessage(jid, {
+                        audio: audioBuffer,
+                        mimetype: reply.mimetype,
+                        fileName: reply.fileName,
+                        caption: reply.caption,
+                        contextInfo: reply.contextInfo || undefined
+                    });
 
-                return true;
+                    if (reply.alsoDocument) {
+
+                        await sock.sendMessage(jid, {
+                            document: audioBuffer,
+                            mimetype: reply.mimetype,
+                            fileName: reply.fileName
+                        });
+
+                    }
+
+                    return true;
+
+                } catch (err) {
+
+                    console.log(
+                        chalk.red(
+                            "AUDIO ERROR:",
+                            err.message || err.code || err.response?.status || JSON.stringify(err) || "Unknown error"
+                        )
+                    );
+
+                    try {
+
+                        await sock.sendMessage(jid, {
+                            react: { text: "❌", key: msg.key }
+                        });
+
+                    } catch {}
+
+                    return false;
+
+                }
 
             }
 
