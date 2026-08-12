@@ -441,6 +441,16 @@ export async function executeClientAction({
 
                 try {
 
+                    // DIAGNOSTIC: print exactly which URL/domain we're
+                    // about to fetch — needed to identify what's timing
+                    // out (ETIMEDOUT is a connection-level failure from
+                    // wherever THIS client is hosted, distinct from a
+                    // 403/slow-download; could be a specific domain
+                    // being unreachable from this host's network).
+                    console.log(
+                        chalk.yellow("AUDIO FETCH URL:"), reply.url
+                    );
+
                     const { data: audioBuffer } = await axios.get(reply.url, {
                         responseType: "arraybuffer",
                         timeout: 120000,
@@ -495,30 +505,61 @@ export async function executeClientAction({
 
             case "video": {
 
-                const { data: videoBuffer } = await axios.get(reply.url, {
-                    responseType: "arraybuffer",
-                    timeout: 120000
-                });
+                try {
 
-                await sock.sendMessage(jid, {
-                    video: videoBuffer,
-                    mimetype: reply.mimetype,
-                    fileName: reply.fileName,
-                    caption: reply.caption,
-                    contextInfo: reply.contextInfo || undefined
-                });
+                    console.log(
+                        chalk.yellow("VIDEO FETCH URL:"), reply.url
+                    );
 
-                if (reply.alsoDocument) {
-
-                    await sock.sendMessage(jid, {
-                        document: videoBuffer,
-                        mimetype: reply.mimetype,
-                        fileName: reply.fileName
+                    const { data: videoBuffer } = await axios.get(reply.url, {
+                        responseType: "arraybuffer",
+                        timeout: 120000,
+                        headers: {
+                            "User-Agent":
+                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+                        }
                     });
 
-                }
+                    await sock.sendMessage(jid, {
+                        video: videoBuffer,
+                        mimetype: reply.mimetype,
+                        fileName: reply.fileName,
+                        caption: reply.caption,
+                        contextInfo: reply.contextInfo || undefined
+                    });
 
-                return true;
+                    if (reply.alsoDocument) {
+
+                        await sock.sendMessage(jid, {
+                            document: videoBuffer,
+                            mimetype: reply.mimetype,
+                            fileName: reply.fileName
+                        });
+
+                    }
+
+                    return true;
+
+                } catch (err) {
+
+                    console.log(
+                        chalk.red(
+                            "VIDEO ERROR:",
+                            err.message || err.code || err.response?.status || "Unknown error"
+                        )
+                    );
+
+                    try {
+
+                        await sock.sendMessage(jid, {
+                            react: { text: "❌", key: msg.key }
+                        });
+
+                    } catch {}
+
+                    return false;
+
+                }
 
             }
 
@@ -541,9 +582,16 @@ export async function executeClientAction({
 
                     } else {
 
-                        image = {
-                            url: reply.url
-                        };
+                        const { data: imageBuffer } = await axios.get(reply.url, {
+                            responseType: "arraybuffer",
+                            timeout: 120000,
+                            headers: {
+                                "User-Agent":
+                                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+                            }
+                        });
+
+                        image = imageBuffer;
 
                     }
 
@@ -721,23 +769,45 @@ END:VCARD`;
 
             }
 
-            case "document":
+            case "document": {
+
+                const { data: docBuffer } = await axios.get(reply.url, {
+                    responseType: "arraybuffer",
+                    timeout: 120000,
+                    headers: {
+                        "User-Agent":
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+                    }
+                });
 
                 await sock.sendMessage(jid, {
-                    document: { url: reply.url },
+                    document: docBuffer,
                     fileName: reply.fileName,
                     mimetype: reply.mimetype
                 });
 
                 return true;
 
-            case "sticker":
+            }
+
+            case "sticker": {
+
+                const { data: stickerBuffer } = await axios.get(reply.url, {
+                    responseType: "arraybuffer",
+                    timeout: 120000,
+                    headers: {
+                        "User-Agent":
+                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+                    }
+                });
 
                 await sock.sendMessage(jid, {
-                    sticker: { url: reply.url }
+                    sticker: stickerBuffer
                 });
 
                 return true;
+
+            }
 
             default:
 
