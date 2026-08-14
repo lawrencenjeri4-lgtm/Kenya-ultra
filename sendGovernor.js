@@ -122,56 +122,76 @@ async function processQueue(originalSend) {
     if (processing) return;
     processing = true;
 
-    while (queue.length) {
+    try {
 
-        const { jid, content, options, resolve, reject } = queue.shift();
+        while (queue.length) {
 
-        if (!isReaction(content)) {
+            const { jid, content, options, resolve, reject } = queue.shift();
 
-            const hash = hashContent(content);
+            try {
 
-            if (isBurstDuplicate(jid, hash)) {
+                if (!isReaction(content)) {
 
-                stats.suppressedBursts++;
+                    let hash = null;
 
-                console.log(
-                    chalk.yellow(
-                        `⚠ Suppressed a repeated-burst send to ${jid} (identical content sent ${DUPLICATE_BURST_THRESHOLD}+ times in ${DUPLICATE_BURST_WINDOW_MS / 1000}s — likely a retry loop, not real traffic)`
-                    )
-                );
+                    try {
+                        hash = hashContent(content);
+                    } catch {
+                        // Some message shapes (streams, unusual nested
+                        // objects) can't be hashed — just skip
+                        // duplicate-detection for this one rather than
+                        // letting it take down the whole queue.
+                    }
 
-                resolve(null);
-                continue;
+                    if (hash !== null && isBurstDuplicate(jid, hash)) {
+
+                        stats.suppressedBursts++;
+
+                        console.log(
+                            chalk.yellow(
+                                `⚠ Suppressed a repeated-burst send to ${jid} (identical content sent ${DUPLICATE_BURST_THRESHOLD}+ times in ${DUPLICATE_BURST_WINDOW_MS / 1000}s — likely a retry loop, not real traffic)`
+                            )
+                        );
+
+                        resolve(null);
+                        continue;
+
+                    }
+
+                }
+
+                const delay = computeDelay(jid);
+
+                if (delay > MIN_DELAY_MS) {
+                    await new Promise(r => setTimeout(r, delay));
+                }
+
+                const result = await originalSend(jid, content, options);
+
+                sendTimestamps.push(Date.now());
+                stats.totalSent++;
+                knownChats.add(jid);
+
+                resolve(result);
+
+            } catch (error) {
+
+                reject(error);
 
             }
 
         }
 
-        const delay = computeDelay(jid);
+    } finally {
 
-        if (delay > MIN_DELAY_MS) {
-            await new Promise(r => setTimeout(r, delay));
-        }
-
-        try {
-
-            const result = await originalSend(jid, content, options);
-
-            sendTimestamps.push(Date.now());
-            stats.totalSent++;
-            knownChats.add(jid);
-
-            resolve(result);
-
-        } catch (error) {
-
-            reject(error);
-
-        }
+        // Guaranteed to run even if something above throws in a way
+        // the inner try/catch didn't anticipate — without this, a
+        // single unexpected error could leave `processing` stuck
+        // `true` forever, silently queuing every future send without
+        // ever actually sending anything again.
+        processing = false;
 
     }
-
-    processing = false;
 
 }
 

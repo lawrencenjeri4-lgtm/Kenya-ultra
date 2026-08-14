@@ -17,6 +17,7 @@ import core from "./core.js";
 import { executeClientAction, selfUpdateAndRestart, uploadMediaAndGetUrl, checkAutoReply, handleAutoReplyCommand } from "./clientActions.js";
 import { createSticker, retagSticker } from "./stickerUtils.js";
 import { wrapSendMessage, startActivityLogging } from "./sendGovernor.js";
+import { logSystem, logMemberJoined, logIncomingMessage } from "./consoleLog.js";
 
 dotenv.config();
 
@@ -396,21 +397,33 @@ async function connect(authState) {
 
                 const settings = await getCachedGroupSettings(id);
 
-                if (action === "add" && settings.welcome?.enabled) {
+                if (action === "add") {
 
                     const metadata = await sock.groupMetadata(id);
 
                     for (const participant of participants) {
 
-                        await sock.sendMessage(id, {
-                            text:
+                        logMemberJoined({
+                            name: null, // Baileys doesn't expose a pushName on this event
+                            number: participant.split("@")[0],
+                            userJid: participant,
+                            groupName: metadata.subject,
+                            groupJid: id
+                        });
+
+                        if (settings.welcome?.enabled) {
+
+                            await sock.sendMessage(id, {
+                                text:
 `👋 *Welcome!*
 
 @${participant.split("@")[0]}, welcome to *${metadata.subject}*! 🎉
 
 🐺 Powered by Kenya-Ultra 👑`,
-                            mentions: [participant]
-                        });
+                                mentions: [participant]
+                            });
+
+                        }
 
                     }
 
@@ -563,6 +576,8 @@ async function connect(authState) {
                         "🟢 WhatsApp Connected"
                     )
                 );
+
+                logSystem("WhatsApp connection established");
 
                 retryDelay = 3000;
 
@@ -824,10 +839,6 @@ if (heartbeat) {
 
             }
 
-            console.log(
-                chalk.cyan(`📩 Message from ${jid}: "${text}"`)
-            );
-
             try {
 
                 let groupMetadata = null;
@@ -854,6 +865,15 @@ isBotAdmin = groupMetadata.participants.some(
 );
 
                 }
+
+                logIncomingMessage({
+                    senderName: msg.pushName || "Unknown",
+                    chatId: jid,
+                    groupName: isGroup ? groupMetadata?.subject : null,
+                    groupJid: isGroup ? jid : null,
+                    messageType: msg.message ? Object.keys(msg.message)[0] : "conversation",
+                    text
+                });
 
                // ==============================
 // Automatic Loading UI
