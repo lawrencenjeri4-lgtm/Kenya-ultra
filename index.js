@@ -1000,7 +1000,16 @@ const response = await core.execute(
         isBotAdmin,
         groupMetadata,
         message: msg.message,
-        botIds
+        botIds,
+        // Set by Baileys at the protocol level — true whenever this
+        // account sent the message, regardless of which JID/@lid form
+        // WhatsApp happened to report it under. Unlike sender/senderAlt
+        // matching, this doesn't depend on WhatsApp having already
+        // linked the phone-number and @lid identities server-side, so
+        // it's the most reliable signal for "is this the bot's own
+        // account" — already proven working for .autoreply's owner
+        // check, just never propagated to Core before now.
+        fromMe: msg.key.fromMe
     }
 );
 
