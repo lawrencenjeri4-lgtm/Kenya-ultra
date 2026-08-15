@@ -77,6 +77,15 @@ let hasAttemptedAutoJoin = false;
 
 let PREFIX = ".";
 
+// Bot-owner-level status settings (not per-group — only the bot's own
+// linked account can view/react to contacts' statuses). Fetched on
+// connect, same as PREFIX/mode, and hot-updated via the
+// "update_status_settings" action so a running instance doesn't need
+// a reconnect for .autoviewstatus / .autoreactstatus to take effect.
+let AUTO_VIEW_STATUS = false;
+let AUTO_REACT_STATUS = false;
+let AUTO_REACT_STATUS_EMOJI = "💚";
+
 // Tracks message keys the bot has sent per chat during this runtime,
 // so .delall can clean them up. Capped per chat to avoid unbounded growth.
 const recentBotMessages = new Map();
@@ -595,12 +604,22 @@ async function connect(authState) {
 
                     PREFIX = settings.prefix || ".";
 
+                    AUTO_VIEW_STATUS = Boolean(settings.autoViewStatus);
+                    AUTO_REACT_STATUS = Boolean(settings.autoReactStatus);
+                    AUTO_REACT_STATUS_EMOJI = settings.autoReactStatusEmoji || "💚";
+
                     console.log(
                         chalk.cyan(`✓ Prefix   : ${PREFIX}`)
                     );
 
                     console.log(
                         chalk.cyan(`✓ Mode     : ${settings.mode}`)
+                    );
+
+                    console.log(
+                        chalk.cyan(
+                            `✓ Status   : view=${AUTO_VIEW_STATUS} react=${AUTO_REACT_STATUS} (${AUTO_REACT_STATUS_EMOJI})`
+                        )
                     );
 
                 } catch (err) {
@@ -741,6 +760,60 @@ if (heartbeat) {
             }
 
             const senderIdentities = [sender, senderAlt].filter(Boolean);
+
+            // ---- Status auto-view / auto-react ----
+            // WhatsApp statuses arrive as normal messages.upsert events
+            // on the special "status@broadcast" JID. Handle them here,
+            // first, and return — they're not a real chat and should
+            // never reach the command/text pipeline below (no PREFIX,
+            // no Core execute, nothing).
+            if (jid === "status@broadcast") {
+
+                // Never auto-view/react to the bot's own posted status.
+                if (!msg.key.fromMe && (AUTO_VIEW_STATUS || AUTO_REACT_STATUS)) {
+
+                    try {
+
+                        if (AUTO_VIEW_STATUS) {
+                            await sock.readMessages([msg.key]);
+                        }
+
+                        if (AUTO_REACT_STATUS) {
+
+                            await sock.sendMessage(
+                                "status@broadcast",
+                                {
+                                    react: {
+                                        text: AUTO_REACT_STATUS_EMOJI,
+                                        key: msg.key
+                                    }
+                                },
+                                {
+                                    statusJidList: [
+                                        msg.key.participant,
+                                        sock.user.id
+                                    ].filter(Boolean)
+                                }
+                            );
+
+                        }
+
+                    } catch (error) {
+
+                        console.log(
+                            chalk.red(
+                                "❌ Auto view/react status failed:",
+                                error.message
+                            )
+                        );
+
+                    }
+
+                }
+
+                return;
+
+            }
 
             // "Delete for everyone" and "edit" both arrive as a normal
             // incoming message wrapping a protocolMessage, rather than
@@ -2245,6 +2318,28 @@ else if (response.action === "update_prefix") {
         );
 
     }
+
+}
+
+else if (response.action === "update_status_settings") {
+
+    if (typeof response.autoViewStatus === "boolean") {
+        AUTO_VIEW_STATUS = response.autoViewStatus;
+    }
+
+    if (typeof response.autoReactStatus === "boolean") {
+        AUTO_REACT_STATUS = response.autoReactStatus;
+    }
+
+    if (response.autoReactStatusEmoji) {
+        AUTO_REACT_STATUS_EMOJI = response.autoReactStatusEmoji;
+    }
+
+    console.log(
+        chalk.green(
+            `🔧 Status settings updated: view=${AUTO_VIEW_STATUS} react=${AUTO_REACT_STATUS} (${AUTO_REACT_STATUS_EMOJI})`
+        )
+    );
 
 }
 

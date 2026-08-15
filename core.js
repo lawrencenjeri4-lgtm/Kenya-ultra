@@ -50,7 +50,10 @@ class KenyaUltraCore {
 
             return {
                 prefix: data.prefix || ".",
-                mode: data.mode || "public"
+                mode: data.mode || "public",
+                autoViewStatus: Boolean(data.autoViewStatus),
+                autoReactStatus: Boolean(data.autoReactStatus),
+                autoReactStatusEmoji: data.autoReactStatusEmoji || "💚"
             };
 
         } catch (error) {
