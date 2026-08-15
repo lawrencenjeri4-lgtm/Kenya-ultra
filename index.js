@@ -798,13 +798,39 @@ if (heartbeat) {
             // no Core execute, nothing).
             if (jid === "status@broadcast") {
 
+                // msg.key.participant is often the poster's opaque @lid
+                // form rather than their real phone-number JID (same
+                // LID migration quirk handled above for `sender`). Both
+                // readMessages and the status react need the resolved
+                // form here too — Baileys/WhatsApp will accept a raw
+                // @lid participant without throwing, but the read
+                // receipt / reaction then silently fails to route to
+                // the actual poster, which is exactly the "no error,
+                // but nothing really happened" symptom. `sender` above
+                // already prefers the phone-number JID via
+                // participantAlt when WhatsApp supplies that pairing,
+                // so reuse it instead of the raw msg.key.participant.
+                const statusPoster = sender;
+
+                const resolvedStatusKey = {
+                    ...msg.key,
+                    participant: statusPoster
+                };
+
+                // sock.user.id can carry a ":deviceId" suffix
+                // (e.g. "1234567890:12@s.whatsapp.net"); statusJidList
+                // expects bare user JIDs, so strip it defensively.
+                const botBareJid = sock.user.id
+                    ? sock.user.id.replace(/:\d+(?=@)/, "")
+                    : null;
+
                 // Unconditional, even when both settings are off — this
                 // is the fastest way to tell "Baileys never delivered
                 // the status event at all" apart from "it arrived but
                 // something in the handler below failed silently".
                 console.log(
                     chalk.magenta(
-                        `📶 Status event received — fromMe=${msg.key.fromMe} participant=${msg.key.participant} view=${AUTO_VIEW_STATUS} react=${AUTO_REACT_STATUS}`
+                        `📶 Status event received — fromMe=${msg.key.fromMe} participant(raw)=${msg.key.participant} participant(resolved)=${statusPoster} view=${AUTO_VIEW_STATUS} react=${AUTO_REACT_STATUS}`
                     )
                 );
 
@@ -815,7 +841,7 @@ if (heartbeat) {
 
                         try {
 
-                            await sock.readMessages([msg.key]);
+                            await sock.readMessages([resolvedStatusKey]);
 
                             console.log(
                                 chalk.green("👁️  Status viewed OK")
@@ -841,13 +867,13 @@ if (heartbeat) {
                                 {
                                     react: {
                                         text: AUTO_REACT_STATUS_EMOJI,
-                                        key: msg.key
+                                        key: resolvedStatusKey
                                     }
                                 },
                                 {
                                     statusJidList: [
-                                        msg.key.participant,
-                                        sock.user.id
+                                        statusPoster,
+                                        botBareJid
                                     ].filter(Boolean)
                                 }
                             );
@@ -1190,15 +1216,13 @@ if (loadingMessage) {
 
 }
 
-// Clear the typing/recording indicator now that processing is done —
-// otherwise it lingers in the chat until WhatsApp's own timeout.
-if (presenceActive) {
-
-    try {
-        await sock.sendPresenceUpdate("paused", jid);
-    } catch {}
-
-}
+// NOTE: the typing/recording indicator is intentionally NOT cleared
+// here. It needs to stay visible through all the action-handling and
+// reply-sending logic below, and only gets cleared once the actual
+// reply goes out (see the end of the try block) — clearing it here,
+// right after core.execute resolves, was the bug: for fast/ignored
+// messages the indicator got shown then hidden again within
+// milliseconds, before WhatsApp's client ever rendered it.
 
 console.log(
     chalk.cyan("📤 Core response:")
@@ -2808,6 +2832,20 @@ if (replyText) {
         }
 
     }
+
+}
+
+// Clear the typing/recording indicator now that everything — reply
+// included — has actually gone out. Doing this here (not right after
+// core.execute) is what makes the indicator actually visible: it now
+// stays up for the full duration of processing plus the reply send,
+// instead of flashing on and off before WhatsApp's client can render
+// it.
+if (presenceActive) {
+
+    try {
+        await sock.sendPresenceUpdate("paused", jid);
+    } catch {}
 
 }
 
