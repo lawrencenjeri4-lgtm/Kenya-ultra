@@ -86,6 +86,26 @@ let AUTO_VIEW_STATUS = false;
 let AUTO_REACT_STATUS = false;
 let AUTO_REACT_STATUS_EMOJI = "💚";
 
+// Each one is independent and scoped to where it should show:
+// "off" | "groups" | "dms" | "all". They're no longer forced
+// mutually exclusive against each other globally — you can, say, run
+// typing in DMs and recording in groups at once. WhatsApp still only
+// shows one presence indicator per individual chat though, so if a
+// single chat is in-scope for both, recording wins there (see the
+// scope-resolution helper below).
+let AUTO_TYPING_SCOPE = "off";
+let AUTO_RECORDING_SCOPE = "off";
+
+function scopeMatches(scope, isGroupChat) {
+
+    if (scope === "all") return true;
+    if (scope === "groups") return isGroupChat;
+    if (scope === "dms") return !isGroupChat;
+
+    return false;
+
+}
+
 // Tracks message keys the bot has sent per chat during this runtime,
 // so .delall can clean them up. Capped per chat to avoid unbounded growth.
 const recentBotMessages = new Map();
@@ -608,6 +628,9 @@ async function connect(authState) {
                     AUTO_REACT_STATUS = Boolean(settings.autoReactStatus);
                     AUTO_REACT_STATUS_EMOJI = settings.autoReactStatusEmoji || "💚";
 
+                    AUTO_TYPING_SCOPE = settings.autoTyping || "off";
+                    AUTO_RECORDING_SCOPE = settings.autoRecording || "off";
+
                     console.log(
                         chalk.cyan(`✓ Prefix   : ${PREFIX}`)
                     );
@@ -619,6 +642,12 @@ async function connect(authState) {
                     console.log(
                         chalk.cyan(
                             `✓ Status   : view=${AUTO_VIEW_STATUS} react=${AUTO_REACT_STATUS} (${AUTO_REACT_STATUS_EMOJI})`
+                        )
+                    );
+
+                    console.log(
+                        chalk.cyan(
+                            `✓ Presence : typing=${AUTO_TYPING_SCOPE} recording=${AUTO_RECORDING_SCOPE}`
                         )
                     );
 
@@ -769,16 +798,43 @@ if (heartbeat) {
             // no Core execute, nothing).
             if (jid === "status@broadcast") {
 
+                // Unconditional, even when both settings are off — this
+                // is the fastest way to tell "Baileys never delivered
+                // the status event at all" apart from "it arrived but
+                // something in the handler below failed silently".
+                console.log(
+                    chalk.magenta(
+                        `📶 Status event received — fromMe=${msg.key.fromMe} participant=${msg.key.participant} view=${AUTO_VIEW_STATUS} react=${AUTO_REACT_STATUS}`
+                    )
+                );
+
                 // Never auto-view/react to the bot's own posted status.
                 if (!msg.key.fromMe && (AUTO_VIEW_STATUS || AUTO_REACT_STATUS)) {
 
-                    try {
+                    if (AUTO_VIEW_STATUS) {
 
-                        if (AUTO_VIEW_STATUS) {
+                        try {
+
                             await sock.readMessages([msg.key]);
+
+                            console.log(
+                                chalk.green("👁️  Status viewed OK")
+                            );
+
+                        } catch (error) {
+
+                            console.log(
+                                chalk.red("❌ Status view failed:"),
+                                error?.output?.payload || error?.data || error
+                            );
+
                         }
 
-                        if (AUTO_REACT_STATUS) {
+                    }
+
+                    if (AUTO_REACT_STATUS) {
+
+                        try {
 
                             await sock.sendMessage(
                                 "status@broadcast",
@@ -796,16 +852,18 @@ if (heartbeat) {
                                 }
                             );
 
+                            console.log(
+                                chalk.green("💫 Status reacted OK")
+                            );
+
+                        } catch (error) {
+
+                            console.log(
+                                chalk.red("❌ Status react failed:"),
+                                error?.output?.payload || error?.data || error
+                            );
+
                         }
-
-                    } catch (error) {
-
-                        console.log(
-                            chalk.red(
-                                "❌ Auto view/react status failed:",
-                                error.message
-                            )
-                        );
 
                     }
 
@@ -911,6 +969,11 @@ if (heartbeat) {
                 }
 
             }
+
+            // Declared outside the try below so the error-path cleanup
+            // (in the matching catch) can still see whether a presence
+            // indicator was actually shown for this message.
+            let presenceActive = null;
 
             try {
 
@@ -1059,6 +1122,29 @@ try {
 
 }
 
+// Show the appropriate "typing…" / "recording audio…" indicator
+// while the command is being processed, if enabled for this chat's
+// scope (groups/dms/all). If both happen to be in-scope for this
+// same chat, recording wins — WhatsApp can only show one at a time.
+// `presenceActive` is remembered so the cleanup below only fires
+// when something was actually shown.
+presenceActive =
+    scopeMatches(AUTO_RECORDING_SCOPE, isGroup)
+        ? "recording"
+        : scopeMatches(AUTO_TYPING_SCOPE, isGroup)
+            ? "composing"
+            : null;
+
+if (presenceActive) {
+
+    try {
+
+        await sock.sendPresenceUpdate(presenceActive, jid);
+
+    } catch {}
+
+}
+
 const response = await core.execute(
     SESSION_ID,
     {
@@ -1100,6 +1186,16 @@ if (loadingMessage) {
             delete: loadingMessage.key
         });
 
+    } catch {}
+
+}
+
+// Clear the typing/recording indicator now that processing is done —
+// otherwise it lingers in the chat until WhatsApp's own timeout.
+if (presenceActive) {
+
+    try {
+        await sock.sendPresenceUpdate("paused", jid);
     } catch {}
 
 }
@@ -2343,6 +2439,24 @@ else if (response.action === "update_status_settings") {
 
 }
 
+else if (response.action === "update_presence_settings") {
+
+    if (response.autoTyping) {
+        AUTO_TYPING_SCOPE = response.autoTyping;
+    }
+
+    if (response.autoRecording) {
+        AUTO_RECORDING_SCOPE = response.autoRecording;
+    }
+
+    console.log(
+        chalk.green(
+            `🔧 Presence settings updated: typing=${AUTO_TYPING_SCOPE} recording=${AUTO_RECORDING_SCOPE}`
+        )
+    );
+
+}
+
                 else if (response.action === "recover_view_once") {
 
     try {
@@ -2705,6 +2819,14 @@ if (replyText) {
                         error.message
                     )
                 );
+
+                if (presenceActive) {
+
+                    try {
+                        await sock.sendPresenceUpdate("paused", jid);
+                    } catch {}
+
+                }
 
                 try {
 

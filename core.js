@@ -53,7 +53,9 @@ class KenyaUltraCore {
                 mode: data.mode || "public",
                 autoViewStatus: Boolean(data.autoViewStatus),
                 autoReactStatus: Boolean(data.autoReactStatus),
-                autoReactStatusEmoji: data.autoReactStatusEmoji || "💚"
+                autoReactStatusEmoji: data.autoReactStatusEmoji || "💚",
+                autoTyping: data.autoTyping || "off",
+                autoRecording: data.autoRecording || "off"
             };
 
         } catch (error) {
