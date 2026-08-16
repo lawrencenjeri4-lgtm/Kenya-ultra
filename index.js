@@ -93,6 +93,33 @@ let AUTO_VIEW_STATUS = false;
 let AUTO_REACT_STATUS = false;
 let AUTO_REACT_STATUS_EMOJI = "💚";
 
+// Reacts to regular chat messages (DMs/groups) — separate from
+// AUTO_REACT_STATUS above, which only reacts to WhatsApp Status
+// updates. Same hot-update pattern via "update_message_react_settings".
+let AUTO_REACT_MESSAGES = false;
+
+// null = random mode (pick a different emoji from the pool below on
+// every message). Set to a specific emoji via ".autoreactmsg <emoji>
+// on" to lock it to just that one instead.
+let AUTO_REACT_MESSAGES_EMOJI = null;
+
+const AUTO_REACT_EMOJI_POOL = [
+    "👍", "❤️", "😂", "😮", "😢", "🙏", "🔥", "🎉", "👏", "😍",
+    "🤣", "😊", "😎", "🥳", "💯", "✅", "👌", "🙌", "😁", "🤩",
+    "😅", "😇", "🥰", "😆", "😉", "🤝", "💪", "✨", "🌟", "⚡",
+    "💖", "💕", "😄", "😃", "🤗", "🙃", "😋", "🤔", "👀", "🫡",
+    "💀", "😭", "🥹", "😳", "🤯", "🫶", "👑", "🎊", "🍀", "🌈",
+    "🎯", "🚀", "💥", "🥂", "🍾", "🤙", "✊", "🫡", "😌", "🥲",
+    "😏", "🤠", "👋", "🫂", "💝", "🎈", "🌻", "🌸", "🍻", "☕",
+    "😜", "😝", "🤪", "😛"
+];
+
+function pickRandomReactionEmoji() {
+    return AUTO_REACT_EMOJI_POOL[
+        Math.floor(Math.random() * AUTO_REACT_EMOJI_POOL.length)
+    ];
+}
+
 // Each one is independent and scoped to where it should show:
 // "off" | "groups" | "dms" | "all". They're no longer forced
 // mutually exclusive against each other globally — you can, say, run
@@ -651,6 +678,9 @@ async function connect(authState) {
                     AUTO_REACT_STATUS = Boolean(settings.autoReactStatus);
                     AUTO_REACT_STATUS_EMOJI = settings.autoReactStatusEmoji || "💚";
 
+                    AUTO_REACT_MESSAGES = Boolean(settings.autoReactMessages);
+                    AUTO_REACT_MESSAGES_EMOJI = settings.autoReactMessagesEmoji || null;
+
                     AUTO_TYPING_SCOPE = settings.autoTyping || "off";
                     AUTO_RECORDING_SCOPE = settings.autoRecording || "off";
 
@@ -1084,6 +1114,30 @@ if (!msg.key.fromMe && !text.startsWith(PREFIX)) {
             text: autoReplyResult.message,
             mentions: autoReplyResult.mentionedJid
         });
+
+    }
+
+}
+
+// ── Auto-react: reacts to any incoming chat message when enabled.
+// Separate from AUTO_REACT_STATUS (which is for WhatsApp Status
+// updates only) — this fires on regular DM/group messages.
+if (!msg.key.fromMe && AUTO_REACT_MESSAGES) {
+
+    try {
+
+        await sock.sendMessage(jid, {
+            react: {
+                text: AUTO_REACT_MESSAGES_EMOJI || pickRandomReactionEmoji(),
+                key: msg.key
+            }
+        });
+
+    } catch (err) {
+
+        console.log(
+            chalk.yellow(`Auto-react failed: ${err.message}`)
+        );
 
     }
 
@@ -2271,9 +2325,16 @@ else if (response.action === "list_online") {
 
         sock.ev.on("presence.update", handler);
 
-        try {
-            await sock.presenceSubscribe(jid);
-        } catch {}
+        // WhatsApp doesn't broadcast "online" at the group level —
+        // presence is a per-contact concept. Subscribing to the
+        // group jid alone (the old behavior here) never triggers
+        // presence.update events at all, which is why this never
+        // detected anyone. Need to subscribe to each participant.
+        await Promise.allSettled(
+            participants
+                .filter(p => !botIds.includes(p))
+                .map(p => sock.presenceSubscribe(p).catch(() => {}))
+        );
 
         await new Promise(r => setTimeout(r, 8000));
 
@@ -2481,6 +2542,24 @@ else if (response.action === "update_status_settings") {
     console.log(
         chalk.green(
             `🔧 Status settings updated: view=${AUTO_VIEW_STATUS} react=${AUTO_REACT_STATUS} (${AUTO_REACT_STATUS_EMOJI})`
+        )
+    );
+
+}
+
+else if (response.action === "update_message_react_settings") {
+
+    if (typeof response.autoReactMessages === "boolean") {
+        AUTO_REACT_MESSAGES = response.autoReactMessages;
+    }
+
+    if (response.autoReactMessagesEmoji) {
+        AUTO_REACT_MESSAGES_EMOJI = response.autoReactMessagesEmoji;
+    }
+
+    console.log(
+        chalk.green(
+            `🔧 Message react settings updated: react=${AUTO_REACT_MESSAGES} (${AUTO_REACT_MESSAGES_EMOJI})`
         )
     );
 
