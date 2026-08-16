@@ -21,6 +21,22 @@ import { logSystem, logMemberJoined, logIncomingMessage } from "./consoleLog.js"
 
 dotenv.config();
 
+// Without these, ANY single uncaught error anywhere in the bot
+// (a bad message handler, a rejected promise nobody awaited, a
+// stray API failure) kills the entire Node process instantly. On
+// most hosts (Pterodactyl included) that just triggers an endless
+// restart loop — and since console output resets on every restart
+// (see console.clear() below), the actual error never gets seen.
+// Log instead of dying so the process stays up and the real cause
+// is visible in the console.
+process.on("uncaughtException", (err) => {
+    console.error(chalk.red("🔥 Uncaught Exception:"), err);
+});
+
+process.on("unhandledRejection", (reason) => {
+    console.error(chalk.red("🔥 Unhandled Rejection:"), reason);
+});
+
 const VERSION = "1.0.0";
 
 const SESSION_ID = process.env.SESSION_ID;
@@ -2300,22 +2316,25 @@ else if (response.action === "list_online") {
 
         const online = new Set();
 
-        const handler = (updates) => {
+        // Baileys emits a single { id, presences } object per
+        // "presence.update" event — NOT an array. The previous
+        // version here did `for (const update of updates)`, which
+        // threw "updates is not iterable" on the very first event
+        // every time — meaning online.add() never ran, and (before
+        // the global crash handlers existed) this exact error was
+        // what took down the whole process on every .listonline run.
+        const handler = (update) => {
 
-            for (const update of updates) {
+            if (!update?.presences) return;
 
-                if (!update.presences) continue;
+            for (const [participantJid, presence] of Object.entries(update.presences)) {
 
-                for (const [participantJid, presence] of Object.entries(update.presences)) {
+                if (
+                    presence?.lastKnownPresence &&
+                    presence.lastKnownPresence !== "unavailable"
+                ) {
 
-                    if (
-                        presence?.lastKnownPresence &&
-                        presence.lastKnownPresence !== "unavailable"
-                    ) {
-
-                        online.add(participantJid);
-
-                    }
+                    online.add(participantJid);
 
                 }
 
@@ -2330,10 +2349,23 @@ else if (response.action === "list_online") {
         // group jid alone (the old behavior here) never triggers
         // presence.update events at all, which is why this never
         // detected anyone. Need to subscribe to each participant.
+        //
+        // presenceSubscribe() has no built-in timeout — in a large
+        // group, or if WhatsApp throttles a burst of subscribe
+        // requests, one stuck call would hang Promise.allSettled
+        // forever with nothing ever sent back to the chat. Race each
+        // one against a short timeout so a single stuck subscription
+        // can't block the rest.
+        const subscribeWithTimeout = (participantJid) =>
+            Promise.race([
+                sock.presenceSubscribe(participantJid).catch(() => {}),
+                new Promise((resolve) => setTimeout(resolve, 3000))
+            ]);
+
         await Promise.allSettled(
             participants
                 .filter(p => !botIds.includes(p))
-                .map(p => sock.presenceSubscribe(p).catch(() => {}))
+                .map(subscribeWithTimeout)
         );
 
         await new Promise(r => setTimeout(r, 8000));
