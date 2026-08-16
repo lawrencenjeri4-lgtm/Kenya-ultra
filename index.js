@@ -2725,60 +2725,191 @@ else if (response.action === "update_presence_settings") {
         if (!quoted) {
 
             await sock.sendMessage(jid, {
-                text: "❌ No quoted photo found."
+                text: "❌ Reply to an image, video, audio or text message."
             });
 
             return;
 
         }
+
+        // Get members who should receive the Group Status
+        const groupMetadata =
+            await sock.groupMetadata(jid);
+
+        const statusJidList =
+            groupMetadata.participants
+                .map(p => p.id)
+                .filter(Boolean);
+
+        if (!statusJidList.length) {
+
+            await sock.sendMessage(jid, {
+                text: "❌ Could not find group participants."
+            });
+
+            return;
+
+        }
+
+        // =====================================================
+        // TEXT STATUS
+        // =====================================================
+
+        if (response.mediaType === "text") {
+
+            await sock.sendMessage(
+                jid,
+                {
+                    text: response.statusText || "",
+
+                    contextInfo: {
+                        mentionedJid: statusJidList,
+                        isGroupStatus: true
+                    }
+                },
+                {
+                    backgroundColor: "#000000",
+                    statusJidList
+                }
+            );
+
+            await sock.sendMessage(jid, {
+                text: "✅ Text successfully uploaded to Group Status."
+            });
+
+            return;
+
+        }
+
+        // =====================================================
+        // QUOTED MEDIA
+        // =====================================================
 
         const media =
             await downloadQuotedMedia(quoted);
 
-        if (!media || media.type !== "image") {
+        if (!media?.buffer) {
 
             await sock.sendMessage(jid, {
-                text: "❌ Failed to download the photo."
+                text: "❌ Failed to download the quoted media."
             });
 
             return;
 
         }
 
-        const caption =
-`╭⊷ 📢 *GROUP STATUS*
-│
-├⊷ ${response.captionText || "📸"}
-│
-├⊷ 👤 *Posted by:* ${response.postedBy || "Admin"}
-├⊷ 🕒 *When:* ${response.timestamp || ""}
-│
-╰⊷ 🐺 *Powered by Kenya-Ultra 👑*`;
+        // =====================================================
+        // IMAGE
+        // =====================================================
+
+        if (response.mediaType === "image") {
+
+            await sock.sendMessage(
+                jid,
+                {
+                    image: media.buffer,
+                    caption: response.captionText || "",
+
+                    contextInfo: {
+                        mentionedJid: statusJidList,
+                        isGroupStatus: true
+                    }
+                },
+                {
+                    statusJidList
+                }
+            );
+
+            await sock.sendMessage(jid, {
+                text: "✅ Image successfully uploaded to Group Status."
+            });
+
+            return;
+
+        }
+
+        // =====================================================
+        // VIDEO
+        // =====================================================
+
+        if (response.mediaType === "video") {
+
+            await sock.sendMessage(
+                jid,
+                {
+                    video: media.buffer,
+                    caption: response.captionText || "",
+
+                    contextInfo: {
+                        mentionedJid: statusJidList,
+                        isGroupStatus: true
+                    }
+                },
+                {
+                    statusJidList
+                }
+            );
+
+            await sock.sendMessage(jid, {
+                text: "✅ Video successfully uploaded to Group Status."
+            });
+
+            return;
+
+        }
+
+        // =====================================================
+        // AUDIO
+        // =====================================================
+
+        if (response.mediaType === "audio") {
+
+            await sock.sendMessage(
+                jid,
+                {
+                    audio: media.buffer,
+                    mimetype: media.mimetype || "audio/mp4",
+                    ptt: false,
+
+                    contextInfo: {
+                        mentionedJid: statusJidList,
+                        isGroupStatus: true
+                    }
+                },
+                {
+                    statusJidList
+                }
+            );
+
+            await sock.sendMessage(jid, {
+                text: "✅ Audio successfully uploaded to Group Status."
+            });
+
+            return;
+
+        }
 
         await sock.sendMessage(jid, {
-
-            image: media.buffer,
-
-            caption
-
+            text: "❌ Unsupported Group Status media type."
         });
 
-        console.log("✅ Group status (photo) posted.");
+    } catch (err) {
 
-    }
-
-    catch (err) {
-
-        console.log(err);
+        console.log(
+            chalk.red(
+                "❌ Group Status failed:",
+                err?.message || err
+            )
+        );
 
         await sock.sendMessage(jid, {
-
             text:
-                "❌ Failed to post status."
-
+                `❌ Failed to post Group Status.\n\n${err?.message || "Unknown error"}`
         });
 
     }
+
+    return;
 
                 }
 
