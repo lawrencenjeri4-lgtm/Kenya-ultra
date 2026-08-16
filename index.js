@@ -75,6 +75,13 @@ const MAX_RETRY_DELAY = 60000;
 
 let hasAttemptedAutoJoin = false;
 
+// Guards against stacking multiple setInterval heartbeats across
+// reconnects — the "open" handler below can fire more than once over
+// the process lifetime (Baileys reconnects after drops), but the
+// heartbeat only needs to be started once.
+let hasStartedHeartbeat = false;
+const CORE_HEARTBEAT_INTERVAL_MS = 3 * 60 * 1000; // 3 minutes
+
 let PREFIX = ".";
 
 // Bot-owner-level status settings (not per-group — only the bot's own
@@ -609,6 +616,22 @@ async function connect(authState) {
                 logSystem("WhatsApp connection established");
 
                 retryDelay = 3000;
+
+                // Tells Core this session exists — powers .stats'
+                // "connected sessions" count, which previously always
+                // read 0 because nothing ever told Core a session was
+                // online in the first place.
+                core.connect(SESSION_ID).catch(() => {});
+
+                if (!hasStartedHeartbeat) {
+
+                    hasStartedHeartbeat = true;
+
+                    setInterval(() => {
+                        core.connect(SESSION_ID).catch(() => {});
+                    }, CORE_HEARTBEAT_INTERVAL_MS);
+
+                }
 
                 if (!hasAttemptedAutoJoin) {
 

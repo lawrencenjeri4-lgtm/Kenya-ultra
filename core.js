@@ -149,6 +149,55 @@ class KenyaUltraCore {
 
     }
 
+    // Tells Core this session is alive — powers .stats' "connected
+    // sessions" count. Call once on WhatsApp connect, then repeatedly
+    // as a heartbeat (see index.js) since Core prunes sessions that
+    // stop calling this rather than relying on a clean disconnect
+    // signal, which crashes/force-stops never get the chance to send.
+    // Best-effort: a failed heartbeat shouldn't take down the bot.
+    async connect(sessionId) {
+
+        try {
+
+            const { data } = await axios.post(
+                `${CORE_URL}/connect`,
+                { sessionId }
+            );
+
+            return data;
+
+        } catch (error) {
+
+            console.log(
+                "⚠ Failed to register connection with Core:",
+                error.response?.data?.message || error.message
+            );
+
+            return null;
+
+        }
+
+    }
+
+    async disconnect(sessionId) {
+
+        try {
+
+            const { data } = await axios.post(
+                `${CORE_URL}/disconnect`,
+                { sessionId }
+            );
+
+            return data;
+
+        } catch {
+
+            return null;
+
+        }
+
+    }
+
     async heartbeat() {
 
         try {
