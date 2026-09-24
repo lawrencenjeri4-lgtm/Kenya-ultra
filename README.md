@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🇰🇪 Kenya-Ultra
+# Kenya-Ultra
 
 ### Next-Generation WhatsApp Automation Platform
 
