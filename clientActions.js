@@ -5,6 +5,26 @@ import os from "os";
 import axios from "axios";
 import { spawn, spawnSync } from "child_process";
 
+// Fetches the externalAdReply cover image ourselves — WhatsApp does not
+// download thumbnailUrl on its own, so without the bytes the card is blank.
+async function withThumbnail(contextInfo) {
+    const ad = contextInfo?.externalAdReply;
+    if (!ad || ad.thumbnail || !ad.thumbnailUrl) return contextInfo;
+    try {
+        const { data } = await axios.get(ad.thumbnailUrl, {
+            responseType: "arraybuffer",
+            timeout: 15000,
+            headers: { "User-Agent": "Mozilla/5.0" }
+        });
+        return {
+            ...contextInfo,
+            externalAdReply: { ...ad, thumbnail: Buffer.from(data) }
+        };
+    } catch {
+        return contextInfo;
+    }
+}
+
 // ============================================================
 // Auto-reply
 // ============================================================
@@ -211,7 +231,7 @@ const UPDATE_BRANCH = process.env.UPDATE_BRANCH || "main";
 // referenced again here so this file doesn't need to import core.js
 const CORE_URL =
     process.env.CORE_URL ||
-    "https://kenya-ultra-core-production.up.railway.app";
+    "https://kenya-ultra-core-git-900495233478.europe-west1.run.app";
 
 // Never overwrite/delete these when copying the fresh code over
 const UPDATE_EXCLUDE = new Set([
@@ -465,7 +485,7 @@ export async function executeClientAction({
                         mimetype: reply.mimetype,
                         fileName: reply.fileName,
                         caption: reply.caption,
-                        contextInfo: reply.contextInfo || undefined
+                        contextInfo: (await withThumbnail(reply.contextInfo)) || undefined
                     });
 
                     if (reply.alsoDocument) {
@@ -525,7 +545,7 @@ export async function executeClientAction({
                         mimetype: reply.mimetype,
                         fileName: reply.fileName,
                         caption: reply.caption,
-                        contextInfo: reply.contextInfo || undefined
+                        contextInfo: (await withThumbnail(reply.contextInfo)) || undefined
                     });
 
                     if (reply.alsoDocument) {
@@ -569,7 +589,16 @@ export async function executeClientAction({
 
                     let image;
 
-                    if (reply.file) {
+                    if (reply.file && String(reply.file).startsWith("data:")) {
+
+                        // Inline image from Core (e.g. level cards):
+                        // "data:image/png;base64,...." -> raw buffer
+                        image = Buffer.from(
+                            String(reply.file).split(",")[1] || "",
+                            "base64"
+                        );
+
+                    } else if (reply.file) {
 
                         const imagePath = path.join(
                             process.cwd(),
@@ -597,7 +626,10 @@ export async function executeClientAction({
 
                     await sock.sendMessage(jid, {
                         image,
-                        caption: reply.caption || ""
+                        caption: reply.caption || "",
+                        ...(reply.mentions?.length
+                            ? { mentions: reply.mentions }
+                            : {})
                     });
 
                     if (reply.contact) {
