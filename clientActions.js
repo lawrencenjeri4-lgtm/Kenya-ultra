@@ -231,7 +231,7 @@ const UPDATE_BRANCH = process.env.UPDATE_BRANCH || "main";
 // referenced again here so this file doesn't need to import core.js
 const CORE_URL =
     process.env.CORE_URL ||
-    "https://kenya-ultra-core-git-900495233478.europe-west1.run.app";
+    "https://kenya-ultra-core.onrender.com";
 
 // Never overwrite/delete these when copying the fresh code over
 const UPDATE_EXCLUDE = new Set([
