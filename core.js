@@ -2,7 +2,7 @@ import axios from "axios";
 
 const CORE_URL =
     process.env.CORE_URL ||
-    "https://kenya-ultra-core-production.up.railway.app";
+    "https://kenya-ultra-core.onrender.com";
 
 class KenyaUltraCore {
 
